@@ -93,11 +93,13 @@ npm run dev          # http://localhost:3000
 
 ```bash
 cd backend
-../.venv/Scripts/python -m pytest tests -q                    # 136 项测试
+../.venv/Scripts/python -m pytest tests -q                    # 205 项测试
+../.venv/Scripts/python tools/run_lab.py                      # ★ Agent 全流程离线演示
 ../.venv/Scripts/python tools/run_bench.py                    # 主干消融
 ../.venv/Scripts/python tools/run_bench.py --sweep-min-score  # 弃权信号诊断
 ../.venv/Scripts/python tools/probe_routing.py                # 开发期探针
 ../.venv/Scripts/python tools/generate_metadata.py            # 元数据推断
+../.venv/Scripts/python tools/mine_lexicon.py                 # 双语术语挖掘
 ../.venv/Scripts/python tools/smoke_api.py                    # 对运行中的服务做端到端验证
 ```
 
@@ -121,6 +123,7 @@ python scripts/inventory_skills.py   # 生成 docs/技能资产清单.md 与 dat
 
 | 文档 | 说明 |
 |---|---|
+| [`docs/使用指南.md`](docs/使用指南.md) | **先看这个** —— 四种使用方式、演示脚本、常见问题、目录速查 |
 | [`docs/开题报告.md`](docs/开题报告.md) | 选题背景、研究现状、研究内容、创新点、技术路线、进度安排 |
 | [`docs/技术设计文档.md`](docs/技术设计文档.md) | 系统架构、模块设计、技能包规范、路由算法、数据库与 API 设计 |
 | [`docs/调研-AI渗透平台现状.md`](docs/调研-AI渗透平台现状.md) | 开源项目对照、技术范式归类、G1–G10 空白点、评测基准、选题建议 |
