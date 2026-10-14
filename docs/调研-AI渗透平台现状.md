@@ -897,7 +897,215 @@ MCP 已被证明是一个**真实、活跃的攻击面**：
 
 ---
 
-<!--SECTION7-->
+## 7. 现有评测基准与自动化评测方法
+
+> **这一节是毕设"实验验证"章节的核心依据。** 标注规则：⭐A = 我直接抓取了 arXiv 摘要页核实；⭐B = 来自第三方整理，**引用前请自行核实**。
+
+### 7.0 ⚠️ 先纠正一个常见错误（用户提供的参考里有）
+
+**`arXiv:2507.05558` 不是 XAIBench。** 我抓取该页核实，它的真实标题是
+**"AI Agent Smart Contract Exploit Generation"**（作者 **Arthur Gervais**、**Liyi Zhou**）。
+
+**XAIBench 我未能核实到任何真实的论文或仓库** → **请勿在毕设论文中把 XAIBench 当作已知基准引用**，否则可能被评委查出引用错误。如果你是从某处看到这个名字，建议先回溯原始出处。
+
+不过 **2507.05558 这篇论文本身极有价值**（而且它正好来自你可能想引用的 LoRAX/Gervais 团队），关键数据如下：
+
+| 项 | 内容 |
+|---|---|
+| 系统 | **A1** —— 把任意 LLM 变成端到端 exploit 生成器的 agentic 系统 |
+| 工具 | **6 个领域专用工具**（从理解合约行为到在真实区块链状态上测试策略） |
+| **关键设计** | **所有输出都通过执行来具体验证**，只报告**可获利的 PoC exploit** |
+| 论文原文 | *"Early studies show that simply prompting LLMs generates **unverified vulnerability speculations with high false positive rates**."*（**直接引用了"单纯 prompt LLM 会产生高误报"这一前提**——这是你 §5 难点 1 的权威引证） |
+| 评测规模 | **36 个真实易受攻击合约**（Ethereum + BSC） |
+| 结果 | 在 **VERITE benchmark** 上 **63% 成功率** |
+| 经济影响 | 单个 exploit 最高可提取 **$8.59M**，总计 **$9.33M** |
+| 时间窗口（Monte Carlo） | **立即检测 → 86–89% 成功概率；延迟一周 → 降到 6–21%** |
+| **最惊人的结论** | **攻击者只需 $6,000 的 exploit 价值即可获利，而防御者需要 $60,000** —— 论文认为这**"提出了 AI agent 是否注定偏向攻击而非防御的根本性问题"** |
+
+> 💡 **这段"攻防经济不对称"（$6,000 vs $60,000）是整份报告里最有冲击力的引用之一**，非常适合放在你论文的"研究背景/意义"章节，论证"为什么值得研究 AI 渗透"以及"为什么需要负责任的约束机制"。arXiv: <https://arxiv.org/abs/2507.05558>
+
+---
+
+### 7.1 通用渗透 / CTF 能力基准（**毕设可用的主力**）
+
+#### ① AutoPenBench ⭐A —— **最适合本科毕设的基准**
+
+| 项 | 内容 |
+|---|---|
+| 论文 | **AutoPenBench: Benchmarking Generative Agents for Penetration Testing** — [arXiv:2410.03225](https://arxiv.org/abs/2410.03225) |
+| 作者/机构 | Luca Gioacchini, Marco Mellia, Idilio Drago, Alexander Delsanto, Giuseppe Siracusano, Roberto Bifulco（都灵理工 + NEC Laboratories Europe）|
+| 仓库 | <https://github.com/lucagioacchini/auto-pen-bench>（实验代码：<https://github.com/lucagioacchini/genai-pentest-paper>） |
+| 规模 | **33 个任务**，每个代表一个待攻击的易受攻击系统，**难度递增**，含 **in-vitro（自建）+ in-vivo（真实场景）** |
+| 方法 | 用 **generic（通用）+ specific（具体）里程碑**而非单一 flag 评分 → **能区分"部分成功"与"完全失败"**（这是它比其他 CTF 基准更适合毕设的原因） |
+| 对比设计 | 测了**两种 agent 架构**：完全自主 vs 半自主（支持人类交互） |
+| **核心结果** | **完全自主：21% 成功率**（简单任务 27%，**真实世界任务只解出 1 个**）<br>**半自主（有人协助）：64% 成功率** |
+| 额外贡献 | 观察了不同 LLM（GPT-4o vs OpenAI o1）对完成任务能力的影响 |
+
+> 🎯 **为什么它最适合你的毕设**：
+> 1. **33 个任务是可跑量的规模**（不是 1000 题那种跑不完），**一台机器 + 有限 API 预算就能完成**
+> 2. **有 milestone 评分** → 你可以在论文里报告"部分完成率"，而不只是二元的 flag 成功率（**对本科毕设更友好，更容易做出有区分度的结果**）
+> 3. **"自主 21% vs 半自主 64%"是一个可直接对标的基线数字** —— 你的方案只要在某个维度显著改变这个数字就有故事
+> 4. **它明确对比了 agent 架构**，与你的"平台/架构"选题天然对口
+
+#### ② Cybench ⭐A —— 学术规格最高的 CTF 基准
+
+| 项 | 内容 |
+|---|---|
+| 论文 | **Cybench: A Framework for Evaluating Cybersecurity Capabilities and Risks of Language Models** — [arXiv:2408.08926](https://arxiv.org/abs/2408.08926)（**ICLR 2025 Oral**） |
+| 机构 | Stanford CRFM 等（含 Dan Boneh、Percy Liang、Daniel E. Ho） |
+| 站点 | <https://cybench.github.io> |
+| 规模 | **40 个专业级 CTF 任务**，来自 **4 个不同 CTF 赛事**（要求"新近、有意义、难度跨度大"） |
+| 特色 | 每题含**独立描述 + starter files + 可执行命令并观察输出的环境**；因多数任务超出当时模型能力，**为每题引入 subtask 做细粒度评估** |
+| 已评测 | 8 个模型（GPT-4o、o1-preview、Claude 3 Opus、Claude 3.5 Sonnet、Mixtral 8x22B、Gemini 1.5 Pro、Llama 3 70B、Llama 3.1 405B）+ **4 种 agent scaffold**（structured bash / action-only / pseudoterminal / web search） |
+| **人类基线（很有用）** | Claude 3.5 Sonnet / GPT-4o / o1-preview / Claude 3 Opus **解出了人类队伍最多需 11 分钟的任务**；**最难的任务人类队伍用了 24 小时 54 分钟** |
+
+> 🎯 **适合用来做什么**：如果你要论证"我的 Agent 达到了什么水平"，**Cybench 的"人类耗时基线"是最有说服力的对照**（能说"我的系统解决了人类需 X 分钟的任务"）。**但 40 题的专业级 CTF 对本科生偏难，建议只取子集。**
+
+#### ③ NYU CTF Bench ⭐A —— 规模最大、工程最成熟的 CTF 基准
+
+| 项 | 内容 |
+|---|---|
+| 论文 | **NYU CTF Bench: A Scalable Open-Source Benchmark Dataset for Evaluating LLMs in Offensive Security** — [arXiv:2406.05590](https://arxiv.org/abs/2406.05590) |
+| 机构 | NYU（Minghao Shao、**Brendan Dolan-Gavitt**、Ramesh Karri、Muhammad Shafique 等） |
+| 仓库 | <https://github.com/NYU-LLM-CTF/NYU_CTF_Bench> ｜ 自动化框架 <https://github.com/NYU-LLM-CTF/llm_ctf_automation> |
+| 规模 | 第三方整理称 **200 题正式 + 55 题开发集，6 大类**（**待核实**） |
+| 特色 | ① 数据库含 **metadata，同时服务 LLM 测试与自适应学习**；② 用 LLM 的 **function calling** 能力构建**全自动系统**，支持**外部工具调用**；③ 题目来自 **CSAW CTF 历年真题**，**Docker 化部署** |
+| 配套 | 后续工作 [nyuctf_agents](https://github.com/NYU-LLM-CTF/nyuctf_agents)（161★，D-CIPHER + Baseline）、[CTFTiny](https://github.com/NYU-LLM-CTF/CTFTiny)（见 §7.3） |
+
+> 🎯 **适合用来做什么**：**Docker 化 + 自动化框架**意味着部署成本低，是"想跑量"时的首选。但 **200 题 × 多次重复 × 多方案对比的 API 成本会失控**，务必取子集。
+
+#### ④ XBOW Validation Benchmarks ⭐A —— **最好的"Web 漏洞"基准，但已饱和**
+
+| 项 | 内容 |
+|---|---|
+| 仓库 | <https://github.com/xbow-engineering/validation-benchmarks>（**722★，Apache-2.0，PHP**，创建 2024-08-19，push 2026-07-07） |
+| 博客 | <https://xbow.com/blog/benchmarks> |
+| 规模 | **104 道 Web 漏洞挑战**（Jeopardy CTF 形式），覆盖 SQLi / IDOR / SSRF 等真实漏洞类别 |
+| 设计优点 | **全部原创**，官方称可"保证训练数据中从未出现过"，**强制系统产生新想法而非背诵**；附 **canary string**（[BIG-bench canary](https://www.alignment.org/canary/)）请求不要收进训练集 |
+| 成绩 | XBOW 当时 **85% 成功率**（官方称"相当于有经验的渗透测试人员一周的工作量"） |
+| **⚠️ 重大时效缺陷** | 官方**编辑注**（原文）：*"These benchmarks were published in 2024. **They are now outdated and should no longer be used to measure offensive performance.**"* 第三方整理称**已被主流模型刷到接近 100% 饱和**（B 级） |
+
+> 🎯 **正确用法**：**可作为"与历史工作对比的基线"或"你系统的冒烟测试集"，但绝不能作为毕设的最终评测集** —— 否则评委会质疑"饱和基准无法区分优劣"。**在论文中主动引用官方那条"不再适用"的声明，反而显得你文献功课扎实。**
+
+#### ⑤ TSecBench ⭐B —— **中文侧最重要、且最适合毕设的基准**
+
+| 项 | 内容 |
+|---|---|
+| 平台 | **TSecBench**（腾讯 **云鼎实验室**自研，AI 攻防能力跑分基准）— <https://tsecbench.zc.tencent.com/> |
+| 规模 | **v1 含 63 道真实漏洞挑战，满分 23000**，按题目难度加权计分 |
+| 环境 | 参赛智能体在**受控沙箱**中自主渗透获取 flag；采用**闭卷模式**（第三方整理称"结果更准确"） |
+| 维度 | 第三方整理称覆盖 **6 大维度**：Web/二进制漏洞挖掘、漏洞利用、多阶段渗透、云攻击、对抗规避 |
+| 接入 | 支持多种 Agent 接入方式 |
+| 配套材料 | ⭐ **云鼎实验室公开了完整的越界实验复盘**（§5.0），含**攻击链、思考链、修复清单** —— **这是全领域最好的"实验材料"** |
+| 真实榜单数据 | 第三方整理：润建股份以 **98.44 分**登顶榜首（2026-09-22），此前以 **93.91 分**位列第二（2026-08-25）（B 级，来源：搜狐 / 同花顺财经）|
+
+> 🎯 **为什么它对本科毕设特别好**：
+> 1. **中文界面、中文文档、中文榜单** → 答辩时评委能直接看懂，**沟通成本最低**
+> 2. **63 题的规模适合跑量**（比 200 题的 NYU CTF Bench 现实得多）
+> 3. **加权计分** → 能反映"解出难题"的价值差异，比二元计数更有区分度
+> 4. **它本身就是"越界熔断"问题的现实对标物** → 与候选 B 完美契合
+
+### 7.2 其他基准（多为 ⭐B，**引用前请核实**）
+
+| 基准 | 论文/仓库 | Stars | 规模与重点 |
+|---|---|---:|---|
+| **CyberGym** | [arXiv:2506.02548](https://arxiv.org/abs/2506.02548)（ICLR 2026）｜ [sunblaze-ucb/cybergym](https://github.com/sunblaze-ucb/cybergym) | 784 | UC Berkeley；**真实世界漏洞分析，240GB 数据集**；配 4 个示例 Agent |
+| **CVE-Bench** | [arXiv:2503.17332](https://arxiv.org/abs/2503.17332)（ICML 2025）｜ [uiuc-kang-lab/cve-bench](https://github.com/uiuc-kang-lab/cve-bench) | — | **40 个 critical 严重程度的真实 CVE**；首个基于真实 CVE 的 Web 漏洞利用 Agent 评测 |
+| **SEC-bench** | [arXiv:2506.11791](https://arxiv.org/abs/2506.11791)（NeurIPS 2025）｜ [SEC-bench/SEC-bench](https://github.com/SEC-bench/SEC-bench) | — | **200 个 C/C++ 真实 CVE**，**PoC + 补丁双任务**；首个全自动化的真实安全工程评测 |
+| **CTFTiny** | [arXiv:2508.05674](https://arxiv.org/abs/2508.05674)（AAAI 2026）｜ [NYU-LLM-CTF/CTFTiny](https://github.com/NYU-LLM-CTF/CTFTiny) | — | **50 题轻量 CTF 子集** + 配套 **CTFJudge（LLM-as-a-Judge）**；**专为降低复现成本设计** |
+| **BountyBench** | <https://bountybench.github.io/>（Stanford CRFM, 2025-05） | — | **25 个真实 GitHub 项目 + Bug Bounty**；**用美元金额量化攻防影响力**（方法论很新颖） |
+| **InterCode-CTF** | [arXiv:2306.14898](https://arxiv.org/abs/2306.14898)（NeurIPS 2023 D&B）｜ [princeton-nlp/intercode](https://github.com/princeton-nlp/intercode) | 255 | **100 道 picoCTF 题**；Bash/SQL/Python/CTF 交互式代码 Agent 评测；**难度最低、最适合入门** |
+| **CyberSecEval 1/2/3/4** | [arXiv:2312.04724](https://arxiv.org/abs/2312.04724) / [arXiv:2408.01605](https://arxiv.org/abs/2408.01605)｜ [meta-llama/PurpleLlama](https://github.com/meta-llama/PurpleLlama) | 4.4k | Meta 出品；跨多类任务（不安全代码 / Prompt Injection / 攻击辅助 / AutoPatchBench） |
+| **inspect_cyber** | [UKGovernmentBEIS/inspect_cyber](https://github.com/UKGovernmentBEIS/inspect_cyber) | 38 | **英国 AI 安全研究院（UK AISI）官方** Agentic Cyber 评估扩展；任务可插拔 |
+| **BoxPwnr** | [0ca/BoxPwnr](https://github.com/0ca/BoxPwnr) | 450 | ⭐ **跨 15 个平台的基准框架**（HackTheBox / TryHackMe / picoCTF / Cybench / XBOW 等）—— **一次接入可跑多个基准，毕设的效率利器** |
+
+**⚠️ CyberSecEval 的定位陷阱**：它测的是 **"LLM 自身的安全性 / 攻击辅助能力"**（能否生成不安全代码、能否被诱导协助攻击），**不是"AI 渗透 Agent 的渗透能力"**。**两者不能混用**，论文里务必区分清楚。
+
+### 7.3 本科毕设可用的「最低成本自动化评测方法」（**可操作方案**）
+
+综合上面的分析，我给出一个**在单台笔记本 + 有限预算内可完成**的具体方案：
+
+#### 方案：三层评测（推荐）
+
+```
+第 1 层（必做，成本≈0）：自建靶场 + 自建评分脚本
+  └─ OWASP Juice Shop / DVWA / WebGoat（Docker 一键起）
+     + 已知 CVE 的旧版本组件（真值明确，无需主观判断）
+     + 自己写评分脚本：目标漏洞能否被"实证触发"（跑 PoC 看回显）
+
+第 2 层（核心，成本可控）：AutoPenBench 或 TSecBench 子集
+  └─ AutoPenBench 33 题里取 10–15 题（有 milestone 评分，能报"部分完成率"）
+     或 TSecBench 63 题取子集（中文、加权计分）
+
+第 3 层（加分项，成本较高）：CTFTiny（50 题轻量集，配套 LLM-as-a-Judge）
+     或 Cybench 里挑 5–10 题做"人类耗时基线"对照
+```
+
+#### 为什么第 1 层最重要（**评委只看这个也能给分**）
+
+| 优点 | 说明 |
+|---|---|
+| **真值明确** | DVWA/Juice Shop 每个漏洞都是**已知的、可复现的**，不需要你主观判断"这算不算漏洞" |
+| **成本极低** | 全本地 Docker，**零 API 成本**（除了 Agent 本身跑推理） |
+| **可复现性最好** | 镜像 digest 固定 → 完全可复现，**这是毕设答辩最容易被问的点** |
+| **能做负样本实验** | 你知道靶场**实际有几个漏洞** → 能算出 **precision/recall**（真阳性 / 假阳性），而**几乎所有公开基准都不报假阳性率** → **这就是你的差异化** |
+| **演示效果直观** | 现场演示打穿 DVWA 比演示"跑完 200 题 CTF 得 37%" 生动得多 |
+
+#### 必须报告的指标清单（照着填就有合格的实验章节）
+
+| 指标 | 为什么必须报 | 参考基准值 |
+|---|---|---|
+| **成功率 SR** | 基本盘 | AutoPenBench 自主 21% / 半自主 64% |
+| **部分完成率（milestone 达成率）** | 区分"差一点"和"完全不行" | AutoPenBench 的 generic+specific milestone |
+| **误报率 / precision** | ⭐ **绝大多数基准不报，是你的差异化** | Vulnhuntr 经验：confidence ≥8 才可信 |
+| **token 消耗** | 成本可复现的前提 | PentAGI：典型工作流约 64K token |
+| **金额成本（美元/次或/题）** | 评委必问 | RapidPen：**$0.3–0.6/次** |
+| **耗时** | 实用性 | RapidPen：**200–400 秒拿 shell** |
+| **重复次数 + 方差/置信区间** | ⭐ **非确定性必须处理（见 §5 难点 5）** | 建议每任务重复 **≥3 次**，报告均值±标准差 |
+| **越界尝试次数** | ⭐ **几乎无人报告（云鼎刚提出要做）** | 云鼎实验：56 轮决策 / 4292 次工具调用 |
+| **完整披露清单** | 可复现性 | 模型版本、参数、工具版本、镜像 digest、system prompt 全文（建议放附录） |
+
+#### ⚠️ 三个必须提前规划的现实约束
+
+1. **API 成本会失控** —— 跑 5 个 Agent × 15 题 × 3 次 = 225 次完整渗透任务。**建议**：
+   - 主实验用**便宜模型**（如 DeepSeek/Qwen 系），**只在抽样任务上用强模型对比**
+   - 用**本地模型**（Ollama + Qwen）跑一部分，**但注意 PentAGI README 警告的 tool-call parser 问题**（见 §2.2 ②）
+   - **在论文里明确说明预算约束与取舍** —— 这是诚实且被接受的
+2. **工具链版本漂移** —— `nuclei` 模板库每天都在更新，今天的"发现"明天可能消失。**建议固定 nuclei 模板版本并记录**（或用 `-t` 指定固定模板目录）
+3. **不要碰真实目标** —— 全部在自建靶场/授权环境完成。**这是学术红线也是法律红线**，且会直接导致毕设不被通过。
+
+### 7.4 现有基准的方法论缺陷（**这段本身就是论文的"研究空白"论述**）
+
+| 缺陷 | 说明 | 谁在尝试解决 |
+|---|---|---|
+| **1. 基准污染** | 公开基准会被收进训练数据 → 模型"背答案"而非"解题" | XBOW 用**原创题 + canary string**；但**没有通用的防污染机制** |
+| **2. 饱和** | XBOW 104 题已被刷到接近 100%，官方**自己宣布不再适用** | 无系统解法，只能不断出新基准（军备竞赛） |
+| **3. 只测 flag，不测质量** | 拿到 flag ≠ 好的渗透测试。真实交付还需报告质量、覆盖度、修复建议、可读性 | **基本无人解决** ← 空白 |
+| **4. 几乎没有误报统计** | 所有主流基准只报"解出率"，**几乎不报 precision / false positive rate** | **无人系统解决** ← **最大的方法学空白** |
+| **5. 缺乏成本归一化** | 不报 token/金额/时间 → 无法比较性价比 | 只有 RapidPen 等少数给出美元成本 |
+| **6. 缺乏越界统计** | 没有基准报告"agent 有多少次尝试越出 scope" | **云鼎实验室刚提出要做**（§5.0）← 明确空白 |
+| **7. 任务分布偏 CTF** | CTF 题 ≠ 真实企业内网；真实环境的 AD/横向/业务逻辑覆盖不足 | cochise（AD 渗透，TOSEM 2025）、BountyBench（真实项目）在做 |
+| **8. 单次运行、无重复** | 非确定性环境下单次结果不具统计意义 | **无规范** ← 空白 |
+
+> 🎯 **这 8 条缺陷里，第 3、4、6、8 条是明确空白，且都指向同一个方向：现有基准只测"能不能解出"，不测"解得多好、花了多少、有没有越界、能不能重现"。** → **这就是候选 C（误报治理评测）与候选 B（越界熔断）的立论基础。**
+
+### 7.5 基准选型速查表
+
+| 你的评测目标 | 推荐 | 理由 |
+|---|---|---|
+| **本科毕设主力（最稳）** | **AutoPenBench（取 10–15 题）** | 33 题规模合适、有 milestone 评分、有自主/半自主基线对比 |
+| **中文语境 / 答辩好看** | **TSecBench 子集** | 中文、63 题、加权计分、有官方越界复盘材料 |
+| **自建靶场 + 误报率实验** | **DVWA / Juice Shop / WebGoat + 自建评分** | 真值明确、零 API 成本、可算 precision ← **推荐作为第 1 层** |
+| 入门 / 快速跑通 | InterCode-CTF（100 道 picoCTF） | 难度最低 |
+| 想跨多平台一次接入 | **BoxPwnr** | 一个框架接 15 个平台 |
+| 需要人类耗时基线 | Cybench | 有"人类队伍耗时"官方数据 |
+| 真实 CVE 利用 | CVE-Bench / CyberGym / SEC-bench | 真实漏洞，但资源要求高 |
+| 低成本回归测试 | CTFTiny（50 题 + LLM-as-a-Judge） | 专为降低复现成本设计 |
+| ❌ **不要用作最终评测** | XBOW validation-benchmarks | 官方已声明饱和、不再适用 |
+
+---
+
+<!--SECTION7-END-->
 
 
 ## 8. 差异化空间分析
