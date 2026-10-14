@@ -49,6 +49,24 @@ class RouterConfig:
     #: 是否启用索引侧触发词富化（须在 build_index 前 attach_lexicon）
     enrich_triggers: bool = True
 
+    #: **弃权阈值**（基于 IDF 加权查询词覆盖率，∈[0,1]）：覆盖率低于此值时弃权
+    #: （返回空结果）。
+    #:
+    #: 动机：实测本路由器**弃权率为 0**——对"库中无正确答案"的查询
+    #: （运维配置、性能优化、日常事务）也会硬凑出 top-5。真实使用中这是危险的，
+    #: 会误导 Agent 执行不相关的攻击性技能。
+    #:
+    #: **为何不用 RRF 得分做阈值？** RRF 只用排名、丢弃分数大小，其得分恒等于
+    #: ``1/(k+rank)``，与匹配强度无关——实测无论阈值取 0.004 还是 0.016，
+    #: 弃权准确率始终为 0。故必须改用尺度无关的信号（见
+    #: ``BM25Index.weighted_coverage``）。
+    #:
+    #: **阈值标定纪律**：必须在**留出集**上标定，不可在测试集上调参。
+    min_coverage: float = 0.0
+
+    #: 已废弃的 RRF 得分阈值，保留仅为对照实验（见上：原理上不可行）
+    min_score: float = 0.0
+
     tokenizer: str = "hybrid"
     vector_kind: str = "lsa"
 
@@ -203,6 +221,32 @@ class SkillRouter:
                 if sk is not None and sk.meta.phase == state_phase:
                     fr.rrf_score += cfg.phase_bonus
             fused.sort(key=lambda r: (-r.rrf_score, r.doc_id))
+
+        # 弃权阈值过滤：低置信候选不返回（见 RouterConfig.min_score / min_coverage）
+        result.stage1_recall_all = len(fused)
+        if cfg.min_score > 0.0:
+            fused = [fr for fr in fused if fr.rrf_score >= cfg.min_score]
+
+        # ---- 弃权判定：基于 IDF 加权查询词覆盖率 ----
+        if fused:
+            from .tokenize import TOKENIZERS
+
+            cov_tokens = TOKENIZERS[cfg.tokenizer](retrieval_query)
+            flat = self.registry.bm25
+            # 覆盖率**总是**计算（开销极小），以便离线分析信号分布与标定阈值
+            result.top_coverage = max(
+                (flat.weighted_coverage(fr.doc_id, cov_tokens) for fr in fused[:k]),
+                default=0.0,
+            )
+            if cfg.min_coverage > 0.0 and result.top_coverage < cfg.min_coverage:
+                result.abstained = True
+                result.stage1_recall = len(fused)
+                result.stage1_ranking = [fr.doc_id for fr in fused]
+                result.timing_ms["stage1"] = (time.perf_counter() - t0) * 1000.0
+                result.timing_ms["stage2"] = 0.0
+                result.baseline_meta_tokens = self.registry.baseline_tokens()
+                result.baseline_tokens = result.baseline_meta_tokens
+                return result
 
         result.stage1_recall = len(fused)
         result.stage1_ranking = [fr.doc_id for fr in fused]

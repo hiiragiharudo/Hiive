@@ -210,6 +210,12 @@ class RouteResult:
     #: 若期望技能出现在此列表中却不在 top-k，说明问题在**排序/融合**，加元数据无用；
     #: 若根本不在此列表中，才是**召回**问题。二者需要完全不同的修复方向。
     stage1_ranking: list[str] = field(default_factory=list)
+    #: 弃权阈值过滤**之前**的融合候选数（用于分析阈值丢掉了多少）
+    stage1_recall_all: int = 0
+    #: 是否因覆盖率不足而弃权（返回空结果）
+    abstained: bool = False
+    #: 本次查询的最高 IDF 加权覆盖率（弃权判定的依据）
+    top_coverage: float = 0.0
 
     @property
     def token_saving_ratio(self) -> float:

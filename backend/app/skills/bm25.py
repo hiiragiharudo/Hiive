@@ -112,3 +112,41 @@ class BM25Index:
         hits = [t for t in set(query_tokens) if tf.get(t)]
         hits.sort(key=lambda t: (-self._idf(t), t))
         return hits
+
+    # ---------------------------------------------------------------- 覆盖率
+
+    def _max_idf(self) -> float:
+        """语料中的最大 IDF，用于给**未登录词**赋权。"""
+        if not self._df:
+            return 1.0
+        n = self.size
+        return math.log((n - 1 + 0.5) / (1 + 0.5) + 1.0) if n > 1 else 1.0
+
+    def weighted_coverage(self, doc_id: str, query_tokens: list[str]) -> float:
+        """IDF 加权的查询词覆盖率 ∈ [0, 1]。
+
+        **为什么需要它？** RRF 融合只用**排名**、丢弃分数大小，因此融合得分恒等于
+        ``1/(k+rank)``——**与匹配强度无关**。实测：无论把弃权阈值设在 0.004 还是
+        0.016，弃权准确率始终为 0。故基于 RRF 得分的弃权**在原理上不可行**。
+
+        本方法改用一个**尺度无关**的信号：查询中有多少"信息量"被该文档解释。
+
+            coverage(d, q) = Σ_{t ∈ q} idf(t)·[t ∈ d]  /  Σ_{t ∈ q} idf(t)
+
+        - 未登录词（语料中不存在）赋予**最大 IDF 权重**——所以查不到内容的
+          离题查询覆盖率会很低，正是期望行为；
+        - 覆盖率与查询无关地落在 [0,1]，可跨查询比较，适合做阈值。
+        """
+        tf = self._doc_tf.get(doc_id)
+        terms = set(query_tokens)
+        if not terms:
+            return 0.0
+        max_idf = self._max_idf()
+        total = 0.0
+        hit = 0.0
+        for term in terms:
+            w = self._idf(term) or max_idf
+            total += w
+            if tf and tf.get(term):
+                hit += w
+        return hit / total if total > 0 else 0.0
