@@ -60,9 +60,50 @@ Hiive/
 
 ## 快速开始
 
+### 1. 后端（FastAPI）
+
 ```bash
-# 盘点本机技能语料，生成 docs/技能资产清单.md 与 data/skill_catalog.json
-python scripts/inventory_skills.py
+cd backend
+# 首次：python -m venv ../.venv && ../.venv/Scripts/python -m pip install -e ".[dev,vector]"
+../.venv/Scripts/python -m uvicorn app.main:app --port 8000
+# OpenAPI 文档：http://127.0.0.1:8000/docs
+```
+
+启动时会加载本机技能语料（默认 `~/.dsh/skills`，可用 `HIIVE_SKILL_ROOTS` 覆盖），
+实测 125 个技能：加载约 0.7 s、建索引约 0.6 s、单次路由 6–9 ms。
+
+### 2. 前端（Next.js 控制台）
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:3000
+```
+
+三个页面：
+
+| 页面 | 内容 |
+|---|---|
+| **检索路由** | ★ 演示核心：输入任务描述 → 展示召回技能、**召回依据（命中字段与得分）**、跨语言扩展明细、与全量注入的成本对比 |
+| 技能库 | 健康度统计、过滤检索、技能详情（依赖闭包、索引侧富化术语、token 估算） |
+| 评测看板 | SkillRoute-Bench 指标、**一键复现主干消融的各组配置**、失效明细（区分召回失败与排序失败） |
+
+### 3. 命令行工具（无需启动服务）
+
+```bash
+cd backend
+../.venv/Scripts/python -m pytest tests -q                    # 136 项测试
+../.venv/Scripts/python tools/run_bench.py                    # 主干消融
+../.venv/Scripts/python tools/run_bench.py --sweep-min-score  # 弃权信号诊断
+../.venv/Scripts/python tools/probe_routing.py                # 开发期探针
+../.venv/Scripts/python tools/generate_metadata.py            # 元数据推断
+../.venv/Scripts/python tools/smoke_api.py                    # 对运行中的服务做端到端验证
+```
+
+### 4. 盘点本机技能语料
+
+```bash
+python scripts/inventory_skills.py   # 生成 docs/技能资产清单.md 与 data/skill_catalog.json
 ```
 
 > 该脚本扫描本机多源技能语料（DSH 技能库、自建 Agent 身份包、SRC 报告库），

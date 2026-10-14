@@ -37,7 +37,15 @@ class Settings:
     #: 自动挖掘的双语词典（可空）
     lexicon_path: Path | None = None
     #: 是否把词典反查得到的术语并入 `triggers`（索引侧富化）
-    enrich_triggers: bool = True
+    #:
+    #: **默认 False——依据实测**：富化与查询侧扩展**都作用于 `triggers` 字段**，
+    #: 是替代品而非互补品。SkillRoute-Bench 实测（`tools/run_bench.py`）：
+    #: - 查询扩展 OFF 时，富化显著有益：R@5 .658 → .789
+    #: - 查询扩展 ON  时，富化**略微有害**：R@5 .842 → .803
+    #:
+    #: 由于默认开启了查询扩展（更有效且查询期开销可忽略），故富化默认关闭。
+    #: 若要对比两种机制，用 `HIIVE_ENRICH_TRIGGERS=1` 打开后 `POST /api/skills/reload`。
+    enrich_triggers: bool = False
     #: 是否并入自动挖掘层（实测其边际贡献为负，默认关闭）
     lexicon_include_mined: bool = False
 
