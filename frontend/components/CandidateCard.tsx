@@ -68,6 +68,12 @@ export default function CandidateCard({
         <span className="badge">
           正文 ≈ {cand.estimated_body_tokens.toLocaleString()} token
         </span>
+        {cand.source && <span className="badge">来源 {cand.source}</span>}
+        {cand.applicable_rules?.length > 0 && (
+          <span className="badge accent" title={cand.applicable_rules.join(", ")}>
+            适用约束 {cand.applicable_rules.length}
+          </span>
+        )}
         <button className="link" onClick={() => setShowBody((v) => !v)}>
           {showBody ? "收起正文" : "查看正文"}
         </button>

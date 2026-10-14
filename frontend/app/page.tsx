@@ -275,6 +275,77 @@ export default function RoutePage() {
             <CostComparison cost={result.cost} />
           </div>
 
+          {result.arbitration?.dropped && result.arbitration.dropped.length > 0 && (
+            <div className="card">
+              <h2>
+                技能仲裁
+                <span className="dim small" style={{ fontWeight: 400, marginLeft: 10 }}>
+                  检索返回 {result.candidates.length + result.arbitration.dropped.length} 个，
+                  仲裁后保留 {result.candidates.length} 个
+                </span>
+              </h2>
+              <div className="notice warn small">
+                <b>为什么需要仲裁？</b>技能可以在自己的 <code>description</code> 里
+                <b>自称</b>为"总路由/入口"，规范对此没有约束。语料实测：
+                5 个技能抢同一触发词、4 个自称总路由 →
+                同一输入可能走 4 条不同路线，<b>行为不一致</b>。
+              </div>
+              {result.arbitration.dropped.map((d, i) => (
+                <div key={i} className="reason" style={{ marginTop: 8 }}>
+                  <span className="mono" style={{ color: "var(--bad)" }}>
+                    ✂ {d.name}
+                  </span>{" "}
+                  <span className="dim small">— {d.reason}</span>
+                </div>
+              ))}
+              {!!result.arbitration.applied_constraints?.length && (
+                <div className="small dim mt">
+                  应用的约束：{result.arbitration.applied_constraints.join("；")}
+                </div>
+              )}
+            </div>
+          )}
+
+          {result.attached_rules?.length > 0 && (
+            <div className="card">
+              <h2>
+                适用约束
+                <span className="dim small" style={{ fontWeight: 400, marginLeft: 10 }}>
+                  {result.attached_rules.length} 条 · 约束在决策处显式带回，不依赖模型记忆
+                </span>
+              </h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>规则</th>
+                    <th>恒适用</th>
+                    <th>主题</th>
+                    <th>摘要</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.attached_rules.map((r) => (
+                    <tr key={r.name}>
+                      <td className="mono">{r.name}</td>
+                      <td>{r.always && <span className="badge on">恒适用</span>}</td>
+                      <td className="small dim">{r.topics.join(", ") || "—"}</td>
+                      <td className="small dim">{r.summary.slice(0, 76)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {result.rule_conflicts?.length > 0 && (
+                <div className="small dim mt">
+                  <b>相关冲突裁决</b>：
+                  {result.rule_conflicts
+                    .slice(0, 4)
+                    .map((c) => `${c.topic} → ${c.winner === "__rules__" ? "以 rules 为准" : c.winner}`)
+                    .join("；")}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="card">
             <h2>
               召回候选

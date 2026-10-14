@@ -9,6 +9,7 @@ import { API_BASE, api } from "@/lib/api";
 const NAV = [
   { href: "/", label: "检索路由" },
   { href: "/skills", label: "技能库" },
+  { href: "/rules", label: "规则与仲裁" },
   { href: "/bench", label: "评测看板" },
 ];
 

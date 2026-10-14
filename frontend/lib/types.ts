@@ -11,6 +11,7 @@ export interface RouteCandidate {
   description: string;
   phase: string;
   domains: string[];
+  source: string;
   score: number;
   bm25_score: number;
   vector_score: number;
@@ -18,6 +19,7 @@ export interface RouteCandidate {
   vector_rank: number | null;
   matched_fields: string[];
   reason: string;
+  applicable_rules: string[];
   estimated_body_tokens: number;
   body?: string;
 }
@@ -52,6 +54,13 @@ export interface RouteResponse {
   applied_overrides: Record<string, unknown>;
   abstained: boolean;
   top_coverage: number;
+  attached_rules: AttachedRule[];
+  rule_conflicts: { topic: string; winner: string; reason: string }[];
+  arbitration: {
+    kept?: string[];
+    dropped?: { name: string; reason: string }[];
+    applied_constraints?: string[];
+  };
 }
 
 export interface SkillSummary {
@@ -150,4 +159,89 @@ export interface BenchInfo {
   by_source: Record<string, number>;
   by_lang: Record<string, number>;
   note: string;
+}
+
+// ---------------------------------------------------------------- 规则层
+
+export interface RuleItem {
+  name: string;
+  title: string;
+  topics: string[];
+  domains: string[];
+  phases: string[];
+  always: boolean;
+  summary: string;
+  chars: number;
+  estimated_tokens: number;
+  path: string;
+  body?: string;
+}
+
+export interface RuleStats {
+  count: number;
+  total_chars: number;
+  total_estimated_tokens: number;
+  always_on: number;
+  header_tokens_if_all_headers_kept: number;
+  conflict_topics: number;
+  parse_errors: number;
+  note: string;
+}
+
+export interface RulesList extends RuleStats {
+  rules: RuleItem[];
+  conflict_resolution: { topic: string; winner: string; reason: string }[];
+}
+
+// ---------------------------------------------------------------- 技能仲裁表
+
+export interface ArbitrationTaskRoute {
+  task_type: string;
+  load: string[];
+  not_load: string[];
+}
+
+export interface ArbitrationTopic {
+  topic: string;
+  winners: string[];
+  reason: string;
+}
+
+export interface ArbitrationForbidden {
+  skills: string[];
+  reason: string;
+  max_count: number;
+  applies_to: string;
+}
+
+export interface ArbitrationTable {
+  raw_path: string;
+  entry: string[];
+  umbrella_skills: string[];
+  max_execution_skills: number;
+  max_umbrella_skills: number;
+  /** 注意：后端 `to_dict()` 用列表覆盖了 stats() 里的计数，故此字段是明细列表 */
+  task_routes: ArbitrationTaskRoute[];
+  topic_arbiters: number;
+  forbidden_combos: number;
+  has_motto: boolean;
+  parse_warnings: string[];
+  topics: ArbitrationTopic[];
+  forbidden: ArbitrationForbidden[];
+  motto: string;
+}
+
+export interface ArbitrationOutcome {
+  kept: string[];
+  dropped: { name: string; reason: string }[];
+  applied_constraints: string[];
+}
+
+export interface AttachedRule {
+  name: string;
+  title: string;
+  topics: string[];
+  always: boolean;
+  summary: string;
+  estimated_tokens: number;
 }

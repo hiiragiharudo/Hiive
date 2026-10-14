@@ -6,9 +6,14 @@
  */
 
 import type {
+  ArbitrationOutcome,
+  ArbitrationTable,
   BenchInfo,
   BenchMetrics,
   RouteResponse,
+  RuleItem,
+  RulesList,
+  RuleStats,
   SkillDetail,
   SkillStats,
   SkillSummary,
@@ -133,4 +138,27 @@ export const api = {
   benchInfo: () => request<BenchInfo>("/api/bench/info"),
   benchRun: (body: { name?: string; top_k?: number; channels?: string[]; expand_query?: boolean; min_coverage?: number }) =>
     request<BenchMetrics>("/api/bench/run", { method: "POST", body: JSON.stringify(body) }),
+
+  // ---------------------------------------------------------------- 规则层
+  rules: (includeBody = false) =>
+    request<RulesList>(`/api/rules?include_body=${includeBody ? "true" : "false"}`),
+  rulesStats: () =>
+    request<{ rules: RuleStats; arbitration?: ArbitrationTable }>("/api/rules/stats"),
+  rulesApplicable: (skill: string) =>
+    request<{
+      skill: string;
+      domains: string[];
+      phase: string;
+      rules: RuleItem[];
+      conflicts: { topic: string; winner: string; reason: string }[];
+    }>(`/api/rules/applicable?skill=${encodeURIComponent(skill)}`),
+
+  // ---------------------------------------------------------------- 技能仲裁
+  arbitration: () => request<ArbitrationTable>("/api/rules/arbitration"),
+  arbitrationEnforce: (names: string[]) => {
+    const qs = names.map((n) => `names=${encodeURIComponent(n)}`).join("&");
+    return request<ArbitrationOutcome>(`/api/rules/arbitration/enforce?${qs}`, {
+      method: "POST",
+    });
+  },
 };
