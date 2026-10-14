@@ -1,0 +1,53 @@
+# ---- 参考项目（第三方克隆，不入库） ----
+.reference/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+pnpm-lock.yaml.bak
+
+# ---- 环境与密钥（严禁入库） ----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+config.local.*
+credentials*.json
+
+# ---- 运行时产物 ----
+logs/
+*.log
+data/
+tmp/
+.cache/
+eval/results/local/
+eval/runs/
+
+# ---- 自动生成、且含本机路径 / 第三方付费技能正文，不入公开仓库 ----
+# 重新生成：python scripts/inventory_skills.py
+docs/技能资产清单.md
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
