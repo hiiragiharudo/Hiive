@@ -83,10 +83,20 @@ class RouterConfig:
 class SkillRouter:
     """两阶段技能路由器。"""
 
-    def __init__(self, registry: SkillRegistry, config: RouterConfig | None = None) -> None:
+    def __init__(
+        self,
+        registry: SkillRegistry,
+        config: RouterConfig | None = None,
+        rules=None,
+        arbitration=None,
+    ) -> None:
         self.registry = registry
         self.config = config or RouterConfig()
         self.config.validate()
+        #: 规则集合（`app/rules/RuleSet`，可空）。用于在路由结果中附带适用约束。
+        self.rules = rules
+        #: 技能仲裁表（`app/rules/arbitration.py`，可空）。用于消解技能间的抢答冲突。
+        self.arbitration = arbitration
         self._field_tokens: dict[str, dict[str, set[str]]] = {}
         self._build_field_tokens()
 
@@ -263,6 +273,7 @@ class SkillRouter:
 
         injected_meta = 0
         body_tokens = 0
+        built: list[RouteCandidate] = []
         for fr in fused[:k]:
             skill = self.registry.get(fr.doc_id)
             if skill is None:
@@ -270,9 +281,7 @@ class SkillRouter:
             matched, reason = self._explain(
                 skill, query_tokens, bm25_field_scores.get(skill.name)
             )
-            injected_meta += skill.estimated_meta_tokens()
-            body_tokens += skill.estimated_body_tokens()
-            result.candidates.append(
+            built.append(
                 RouteCandidate(
                     skill=skill,
                     score=fr.rrf_score,
@@ -285,12 +294,29 @@ class SkillRouter:
                 )
             )
 
+        # ---- 技能仲裁：消解"同一议题多技能抢答"的冲突 ----
+        # 必须在成本计算**之前**执行——被仲裁丢弃的技能不会注入上下文，
+        # 因此不应计入注入成本。
+        if self.arbitration is not None and built:
+            outcome = self.arbitration.enforce([c.skill.name for c in built])
+            kept = set(outcome.kept)
+            built = [c for c in built if c.skill.name in kept]
+            result.arbitration = outcome.to_dict()
+
+        for cand in built:
+            injected_meta += cand.skill.estimated_meta_tokens()
+            body_tokens += cand.skill.estimated_body_tokens()
+            result.candidates.append(cand)
+
         # ---- 成本模型（同等 k 的保守对照，详见 RouteResult 文档） ----
         result.baseline_meta_tokens = self.registry.baseline_tokens()
         result.injected_meta_tokens = injected_meta
         result.body_tokens = body_tokens
         result.baseline_tokens = result.baseline_meta_tokens + body_tokens
         result.injected_tokens = injected_meta + body_tokens
+
+        # ---- 附加适用规则（始终生效的约束） ----
+        self._attach_rules(result)
 
         # 语义统一：候选为空即视为弃权（无论是因为阈值过滤，还是两通道均无命中）。
         # 这样"弃权"在评估中只有一个含义：**没有返回任何技能**。
@@ -299,6 +325,35 @@ class SkillRouter:
 
         result.timing_ms["stage2"] = (time.perf_counter() - t1) * 1000.0
         return result
+
+    # ---------------------------------------------------------------- 规则附加
+
+    def _attach_rules(self, result: RouteResult) -> None:
+        """把**适用于已召回技能集合**的规则附加到路由结果。
+
+        **设计动机**：约束层（rules）若只存在于提示词或文档里，就要依赖模型"记得住"。
+        把它放在**决策发生的同一处**（路由结果）显式带回，约束就不再依赖记忆——
+        这与作用域强制"不依赖提示词自觉"是同一设计哲学。
+
+        只附加**规则头**（名称 + 摘要），正文按需加载：本机 11 条规则约 127 KB，
+        全文常驻上下文不可行（与技能层面临完全相同的上下文经济学问题）。
+        """
+        if self.rules is None:
+            return
+
+        seen: dict[str, dict] = {}
+        for cand in result.candidates:
+            applicable = self.rules.applicable(
+                domains=cand.skill.meta.domains,
+                phase=cand.skill.meta.phase,
+            )
+            names = [r.name for r in applicable]
+            cand.applicable_rules = names
+            for r in applicable:
+                seen.setdefault(r.name, r.to_dict(include_body=False))
+
+        result.attached_rules = list(seen.values())
+        result.rule_conflicts = self.rules.conflicts_for(list(seen))
 
     # ------------------------------------------------------------ 辅助
 

@@ -142,6 +142,35 @@ class SkillRegistry:
         self.report.loaded = len(self.skills)
         return self.report
 
+    def add_skills(self, skills, source: str = "") -> dict:
+        """追加技能（不重置已有内容）。
+
+        用于接入**非 `SKILL.md` 形态**的语料（知识库文档，见 `kb.py`）。
+        与 `load_roots` 一致地按 `name` 去重并记录冲突，不静默覆盖。
+        """
+        added = 0
+        dup = 0
+        for skill in skills:
+            if skill.name in self.skills:
+                self.report.duplicates.append(
+                    (skill.name, self.skills[skill.name].meta.dir_path, skill.meta.dir_path)
+                )
+                dup += 1
+                continue
+            if source:
+                skill.meta.source = source
+            problems = validate_meta(skill.meta)
+            if problems:
+                self.report.validation_problems[skill.name] = problems
+            self.skills[skill.name] = skill
+            added += 1
+        self.report.loaded = len(self.skills)
+        if source:
+            self.report.by_source[source] = (
+                self.report.by_source.get(source, 0) + added
+            )
+        return {"added": added, "duplicates": dup}
+
     # ------------------------------------------------------------ 索引
 
     def build_index(

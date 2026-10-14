@@ -136,6 +136,10 @@ class RouteCandidate:
     vector_rank: int | None = None
     matched_fields: list[str] = field(default_factory=list)
     reason: str = ""
+    #: 适用于该技能的**规则名**（始终生效的约束，见 `app/rules`）。
+    #: 「路由到技能时同时附带适用约束」是本平台的架构点：约束不依赖模型记忆，
+    #: 而是在决策发生的同一处被显式带回。
+    applicable_rules: list[str] = field(default_factory=list)
 
     def to_dict(self, include_body: bool = False) -> dict:
         return {
@@ -143,6 +147,7 @@ class RouteCandidate:
             "description": self.skill.description,
             "phase": self.skill.meta.phase,
             "domains": self.skill.meta.domains,
+            "source": self.skill.meta.source,
             "score": round(self.score, 6),
             "bm25_score": round(self.bm25_score, 4),
             "vector_score": round(self.vector_score, 4),
@@ -150,6 +155,7 @@ class RouteCandidate:
             "vector_rank": self.vector_rank,
             "matched_fields": self.matched_fields,
             "reason": self.reason,
+            "applicable_rules": self.applicable_rules,
             "estimated_body_tokens": self.skill.estimated_body_tokens(),
             **({"body": self.skill.body} if include_body else {}),
         }
@@ -217,6 +223,15 @@ class RouteResult:
     #: 本次查询的最高 IDF 加权覆盖率（弃权判定的依据）
     top_coverage: float = 0.0
 
+    #: 适用于**本次召回技能集合**的规则（始终生效的约束）及其冲突裁决。
+    #: 只带规则头（名称 + 摘要），正文按需加载——规则全文同样不可常驻上下文。
+    attached_rules: list[dict] = field(default_factory=list)
+    rule_conflicts: list[dict] = field(default_factory=list)
+
+    #: **技能仲裁结果**（见 `app/rules/arbitration.py`）：哪些候选被约束丢弃及原因。
+    #: 仲裁表把"同一议题多技能抢答"的冲突显式消解，避免同一输入产生不一致的行为。
+    arbitration: dict = field(default_factory=dict)
+
     @property
     def token_saving_ratio(self) -> float:
         """总上下文开销的节省比例（同等 k 假设下）。"""
@@ -260,5 +275,8 @@ class RouteResult:
                 "meta_saving_ratio": round(self.meta_saving_ratio, 4),
             },
             "timing_ms": {k: round(v, 2) for k, v in self.timing_ms.items()},
+            "attached_rules": self.attached_rules,
+            "rule_conflicts": self.rule_conflicts,
+            "arbitration": self.arbitration,
             "candidates": [c.to_dict(include_body=include_body) for c in self.candidates],
         }

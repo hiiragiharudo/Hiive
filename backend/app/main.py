@@ -27,6 +27,7 @@ from .api.routes import (
     lexicon_router,
     meta_router,
     route_router,
+    rules_router,
     skills_router,
 )
 from .api.routes_agent import agent_router
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(skills_router)
     app.include_router(route_router)
     app.include_router(lexicon_router)
+    app.include_router(rules_router)
     app.include_router(bench_router)
     app.include_router(agent_router)
     return app

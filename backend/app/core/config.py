@@ -34,6 +34,14 @@ class Settings:
     # ---- 语料（建索引时） ----
     #: 技能根目录，多个用 os.pathsep 分隔
     skill_roots: list[tuple[str, Path]] = field(default_factory=list)
+    #: **知识库**根目录（无 frontmatter 的 Markdown 方法论文档）。
+    #: 与技能同构（都是按需加载的方法论），但格式不同，故需单独接入（见 skills/kb.py）。
+    kb_roots: list[tuple[str, Path]] = field(default_factory=list)
+    #: **规则**根目录（始终生效的约束，见 app/rules）。
+    rules_roots: list[tuple[str, Path]] = field(default_factory=list)
+    #: **技能仲裁表**文件路径（可执行的路由策略，见 app/rules/arbitration.py）。
+    #: 它把"同一议题多技能抢答"的冲突显式消解——语料中已有人工撰写的版本。
+    arbitration_path: Path | None = None
     #: 自动挖掘的双语词典（可空）
     lexicon_path: Path | None = None
     #: 是否把词典反查得到的术语并入 `triggers`（索引侧富化）
@@ -72,6 +80,8 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         s = cls()
+        home = Path(os.path.expanduser("~"))
+        dsh = home / ".dsh" / "skills"
 
         raw_roots = os.environ.get("HIIVE_SKILL_ROOTS")
         if raw_roots:
@@ -82,7 +92,35 @@ class Settings:
                     roots.append((f"root{i}", Path(part)))
             s.skill_roots = roots
         else:
-            s.skill_roots = [("dsh", Path(os.path.expanduser("~")) / ".dsh" / "skills")]
+            s.skill_roots = [("dsh", dsh)]
+
+        # 知识库：本机两处同内容（49 篇），默认取用户目录下那份
+        raw_kb = os.environ.get("HIIVE_KB_ROOTS")
+        if raw_kb:
+            s.kb_roots = [
+                (f"kb{i}", Path(p.strip()))
+                for i, p in enumerate(raw_kb.split(os.pathsep))
+                if p.strip()
+            ]
+        else:
+            s.kb_roots = [("kb", dsh / "src-6k-skill" / "references" / "知识库")]
+
+        raw_rules = os.environ.get("HIIVE_RULES_ROOTS")
+        if raw_rules:
+            s.rules_roots = [
+                (f"rules{i}", Path(p.strip()))
+                for i, p in enumerate(raw_rules.split(os.pathsep))
+                if p.strip()
+            ]
+        else:
+            s.rules_roots = [("rules", dsh / "src-6k-skill" / "references" / "rules")]
+
+        raw_ab = os.environ.get("HIIVE_ARBITRATION")
+        if raw_ab:
+            s.arbitration_path = Path(raw_ab)
+        else:
+            cand_ab = dsh / "src-6k-skill" / "references" / "rules" / "skill-arbitration.md"
+            s.arbitration_path = cand_ab if cand_ab.exists() else None
 
         lex = os.environ.get("HIIVE_LEXICON")
         if lex:
@@ -120,6 +158,8 @@ class Settings:
         """影响索引构建的参数快照——用于前端提示"这些参数改动需重建索引"。"""
         return {
             "skill_roots": [str(p) for _l, p in self.skill_roots],
+            "kb_roots": [str(p) for _l, p in self.kb_roots],
+            "rules_roots": [str(p) for _l, p in self.rules_roots],
             "tokenizer": self.tokenizer,
             "vector_kind": self.vector_kind,
             "n_components": self.n_components,

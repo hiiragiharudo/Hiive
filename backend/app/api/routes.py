@@ -17,6 +17,7 @@ from .schemas import BenchRunRequest, ExpandRequest, ReloadRequest, RouteRequest
 skills_router = APIRouter(prefix="/api/skills", tags=["skills"])
 route_router = APIRouter(prefix="/api", tags=["route"])
 lexicon_router = APIRouter(prefix="/api/lexicon", tags=["lexicon"])
+rules_router = APIRouter(prefix="/api/rules", tags=["rules"])
 bench_router = APIRouter(prefix="/api/bench", tags=["bench"])
 meta_router = APIRouter(prefix="/api", tags=["meta"])
 
@@ -233,6 +234,78 @@ def lexicon_expand(
         "retrieval_query": expanded,
         "expansion": [{"zh": zh, "en": en} for zh, en in matched],
     }
+
+
+# --------------------------------------------------------------------- rules
+
+
+@rules_router.get("/stats", summary="规则层与技能仲裁表统计")
+def rules_stats(svc: SkillService = Depends(get_service)) -> dict:
+    if svc.rules is None:
+        raise HTTPException(status_code=503, detail="规则层未加载")
+    out: dict = {"rules": svc.rules.stats()}
+    if svc.arbitration is not None:
+        out["arbitration"] = svc.arbitration.to_dict()
+    return out
+
+
+@rules_router.get("", summary="规则列表（正文按需）")
+def rules_list(
+    svc: SkillService = Depends(get_service),
+    include_body: bool = Query(False),
+) -> dict:
+    if svc.rules is None:
+        raise HTTPException(status_code=503, detail="规则层未加载")
+    return svc.rules.to_dict(include_body=include_body)
+
+
+@rules_router.get("/applicable", summary="某技能适用的规则")
+def rules_applicable(
+    skill: str = Query(..., min_length=1),
+    svc: SkillService = Depends(get_service),
+) -> dict:
+    """给定技能名，返回适用于它的规则与相关冲突裁决。
+
+    这条接口体现本平台的架构点：**约束不依赖模型记忆**，
+    而是在决策发生的同一处按需取用。
+    """
+    if svc.rules is None:
+        raise HTTPException(status_code=503, detail="规则层未加载")
+    _require_loaded(svc)
+    reg = svc.require_registry()
+    sk = reg.get(skill)
+    if sk is None:
+        raise HTTPException(status_code=404, detail=f"技能不存在: {skill}")
+    got = svc.rules.applicable(domains=sk.meta.domains, phase=sk.meta.phase)
+    return {
+        "skill": skill,
+        "domains": sk.meta.domains,
+        "phase": sk.meta.phase,
+        "rules": [r.to_dict() for r in got],
+        "conflicts": svc.rules.conflicts_for([r.name for r in got]),
+    }
+
+
+@rules_router.get("/arbitration", summary="★ 技能仲裁表（结构化）")
+def rules_arbitration(svc: SkillService = Depends(get_service)) -> dict:
+    """人工撰写的路由仲裁规则，已解析为机器可强制的约束。
+
+    包括：唯一入口、总路由型技能名单与上限、任务类型路由、议题仲裁、禁止组合。
+    """
+    if svc.arbitration is None:
+        raise HTTPException(status_code=404, detail="未配置技能仲裁表")
+    return svc.arbitration.to_dict()
+
+
+@rules_router.post("/arbitration/enforce", summary="对一组技能名执行仲裁")
+def rules_enforce(
+    names: list[str] = Query(..., description="按路由排序的技能名"),
+    svc: SkillService = Depends(get_service),
+) -> dict:
+    """演示仲裁如何消解"多个总路由型技能同时被选中"的冲突。"""
+    if svc.arbitration is None:
+        raise HTTPException(status_code=404, detail="未配置技能仲裁表")
+    return svc.arbitration.enforce(list(names)).to_dict()
 
 
 # --------------------------------------------------------------------- bench

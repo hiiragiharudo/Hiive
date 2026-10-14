@@ -42,6 +42,8 @@ class ServiceState:
     enrichment_stats: dict = field(default_factory=dict)
     overlay_stats: dict = field(default_factory=dict)
     lexicon_stats: dict = field(default_factory=dict)
+    kb_report: dict = field(default_factory=dict)
+    rules_stats: dict = field(default_factory=dict)
     apply_metadata_overlay: bool = True
 
     def to_dict(self) -> dict:
@@ -55,6 +57,8 @@ class ServiceState:
             "enrichment_stats": self.enrichment_stats,
             "overlay_stats": self.overlay_stats,
             "lexicon_stats": self.lexicon_stats,
+            "kb_report": self.kb_report,
+            "rules_stats": self.rules_stats,
             "apply_metadata_overlay": self.apply_metadata_overlay,
         }
 
@@ -68,6 +72,8 @@ class SkillService:
         self.registry: SkillRegistry | None = None
         self.router: SkillRouter | None = None
         self.lexicon: BilingualLexicon | None = None
+        self.rules = None
+        self.arbitration = None
         self.state = ServiceState()
         self._bench_cache: dict[Path, list[BenchItem]] = {}
         self._lab_router: SkillRouter | None = None
@@ -94,6 +100,20 @@ class SkillService:
 
             reg = SkillRegistry()
             report = reg.load_roots(self.settings.skill_roots)
+
+            # ---- 知识库文档接入（与技能同构，但格式不同：无 frontmatter） ----
+            from ..skills.kb import load_kb_docs
+
+            kb_total = 0
+            kb_reports = []
+            for label, root in self.settings.kb_roots:
+                docs, kb_rep = load_kb_docs(root, source=label)
+                res = reg.add_skills(docs, source=label)
+                kb_total += res["added"]
+                kb_reports.append({label: kb_rep.to_dict(), "added": res["added"],
+                                   "duplicates": res["duplicates"]})
+            st.kb_report = {"total_added": kb_total, "roots": kb_reports}
+
             st.load_ms = (time.perf_counter() - t0) * 1000.0
 
             if apply_metadata_overlay:
@@ -113,7 +133,31 @@ class SkillService:
             )
             st.index_ms = (time.perf_counter() - t1) * 1000.0
 
-            router = SkillRouter(reg, self._make_router_config())
+            # ---- 规则层（始终生效的约束）+ 技能仲裁表（可执行的路由策略） ----
+            from ..rules import RuleSet
+            from ..rules.arbitration import ArbitrationTable
+
+            rules = RuleSet()
+            for label, root in self.settings.rules_roots:
+                part = RuleSet.load(root)
+                rules.rules.update(part.rules)
+                rules.parse_errors.extend(part.parse_errors)
+            self.rules = rules
+            st.rules_stats = rules.stats()
+
+            self.arbitration = None
+            ab_path = self.settings.arbitration_path
+            if ab_path and ab_path.exists():
+                self.arbitration = ArbitrationTable.parse(ab_path)
+                st.rules_stats = {
+                    **st.rules_stats,
+                    "arbitration": self.arbitration.stats(),
+                }
+
+            router = SkillRouter(
+                reg, self._make_router_config(),
+                rules=rules, arbitration=self.arbitration,
+            )
 
             # ---- 原子替换 ----
             self.registry = reg
@@ -178,7 +222,10 @@ class SkillService:
                 v = tuple(v)
             setattr(cfg, k, v)
         cfg.validate()
-        return SkillRouter(self.require_registry(), cfg)
+        return SkillRouter(
+            self.require_registry(), cfg,
+            rules=self.rules, arbitration=self.arbitration,
+        )
 
     # ---------------------------------------------------------------- 基准确
 
