@@ -79,6 +79,23 @@ class SkillRegistry:
         self.tokenizer_name: str = "hybrid"
         self.index_build_ms: float = 0.0
 
+        # ---- 跨语言支持（见 lexicon.py） ----
+        self.lexicon = None
+        #: 是否用双语词典给技能补充中文触发词（索引侧富化）
+        self.enrich_triggers: bool = False
+        self._enriched_triggers: dict[str, list[str]] = {}
+        self.enrichment_stats: dict[str, int] = {}
+
+    def attach_lexicon(self, lexicon, enrich_triggers: bool = True) -> None:
+        """挂载双语词典。
+
+        ``enrich_triggers=True`` 时，建索引阶段会把词典反查得到的中文术语
+        并入每个技能的 `triggers` 字段——使**中文查询的字面 token 能直接命中
+        英文描述的技能**，而查询期零额外开销。
+        """
+        self.lexicon = lexicon
+        self.enrich_triggers = enrich_triggers
+
     # ------------------------------------------------------------ 加载
 
     def load_roots(self, roots: list[tuple[str, Path]]) -> LoadReport:
@@ -170,6 +187,7 @@ class SkillRegistry:
         self.bm25 = flat
 
         # ---- 分字段索引（fielded，默认） ----
+        self._build_enrichment()
         self.field_indexes = {}
         for field_name in FIELD_WEIGHTS:
             idx = BM25Index()
@@ -194,15 +212,40 @@ class SkillRegistry:
 
         self.index_build_ms = (_time.perf_counter() - t0) * 1000.0
 
+    def _build_enrichment(self) -> None:
+        """索引侧富化：用双语词典为技能反查中文触发词。
+
+        **设计动机**：语料是双语异质的——103 个细粒度子技能用英文描述，
+        中文查询的字面 token 无法命中。与其在每次查询时做扩展（有查询期开销），
+        不如在建索引时把中文术语写进技能的 `triggers` 字段：一次付费、终身受益，
+        且富化结果**可人工审阅**（能直接看到某技能被补了哪些中文词）。
+        """
+        self._enriched_triggers = {}
+        self.enrichment_stats = {"enriched": 0, "terms_added": 0}
+        if not (self.enrich_triggers and self.lexicon is not None):
+            return
+        for name, skill in self.skills.items():
+            m = skill.meta
+            text = f"{m.name} {m.description} {' '.join(m.targets)}"
+            extra = self.lexicon.zh_triggers_for(text)
+            if extra:
+                self._enriched_triggers[name] = extra
+                self.enrichment_stats["enriched"] += 1
+                self.enrichment_stats["terms_added"] += len(extra)
+
     def _field_text(self, name: str, field: str) -> str:
-        """取某技能的单个字段文本。"""
+        """取某技能的单个字段文本（`triggers` 字段含索引侧富化结果）。"""
         m = self.skills[name].meta
         if field == "name":
             return m.name
         if field == "description":
             return m.description
         if field == "triggers":
-            return " ".join(m.triggers)
+            base = " ".join(m.triggers)
+            extra = self._enriched_triggers.get(name)
+            if extra:
+                base = f"{base} {' '.join(extra)}".strip()
+            return base
         if field == "targets":
             return " ".join(m.targets)
         if field == "domains":
@@ -210,6 +253,10 @@ class SkillRegistry:
         if field == "tools":
             return " ".join(m.tools)
         return ""
+
+    def enriched_triggers(self, name: str) -> list[str]:
+        """返回某技能被索引侧富化补入的中文触发词（供前端展示与人工审阅）。"""
+        return list(self._enriched_triggers.get(name, []))
 
     # ------------------------------------------------------------ 访问
 

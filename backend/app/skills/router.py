@@ -43,6 +43,12 @@ class RouterConfig:
     #: 阶段匹配时叠加到 RRF 得分上的奖励（0 表示关闭）
     phase_bonus: float = 0.004
 
+    #: 是否启用跨语言查询扩展（中文查询 -> 追加英文等价词）。
+    #: 需 registry 已 attach_lexicon；见 lexicon.py。
+    expand_query: bool = True
+    #: 是否启用索引侧触发词富化（须在 build_index 前 attach_lexicon）
+    enrich_triggers: bool = True
+
     tokenizer: str = "hybrid"
     vector_kind: str = "lsa"
 
@@ -163,6 +169,13 @@ class SkillRouter:
             state_phase=state_phase,
         )
 
+        # ---------------- 跨语言查询扩展（查询侧） ----------------
+        retrieval_query = query
+        if cfg.expand_query and self.registry.lexicon is not None:
+            retrieval_query, expansion = self.registry.lexicon.expand_query(query)
+            result.query_expansion = expansion
+            result.retrieval_query = retrieval_query
+
         # ---------------- 阶段一：多通道召回 + RRF 融合 ----------------
         t0 = time.perf_counter()
 
@@ -170,11 +183,13 @@ class SkillRouter:
         bm25_field_scores: dict[str, dict[str, float]] = {}
         if "bm25" in cfg.channels:
             hits, bm25_field_scores = self.registry.search_bm25_detail(
-                query, top_n=cfg.recall_n
+                retrieval_query, top_n=cfg.recall_n
             )
             channel_results["bm25"] = hits
         if "vector" in cfg.channels:
-            channel_results["vector"] = self.registry.search_vector(query, top_n=cfg.recall_n)
+            channel_results["vector"] = self.registry.search_vector(
+                retrieval_query, top_n=cfg.recall_n
+            )
 
         fused = rrf_fuse(channel_results, k=cfg.rrf_k, weights=cfg.weights)
         if not fused:
@@ -197,7 +212,7 @@ class SkillRouter:
 
         from .tokenize import TOKENIZERS
 
-        query_tokens = TOKENIZERS[cfg.tokenizer](query)
+        query_tokens = TOKENIZERS[cfg.tokenizer](retrieval_query)
 
         injected_meta = 0
         body_tokens = 0

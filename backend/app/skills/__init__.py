@@ -14,6 +14,7 @@
 
 from .bm25 import BM25Index
 from .fusion import FusedResult, rrf_fuse
+from .lexicon import CURATED, BilingualLexicon, LexiconStats
 from .models import RouteCandidate, RouteResult, Skill, SkillMeta
 from .parser import SkillParseError, parse_skill_file, validate_meta
 from .registry import LoadReport, SkillRegistry
@@ -22,7 +23,10 @@ from .tokenize import tokenize
 
 __all__ = [
     "BM25Index",
+    "BilingualLexicon",
+    "CURATED",
     "FusedResult",
+    "LexiconStats",
     "LoadReport",
     "RouteCandidate",
     "RouteResult",

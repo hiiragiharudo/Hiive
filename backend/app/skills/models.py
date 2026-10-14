@@ -199,6 +199,11 @@ class RouteResult:
     state_phase: str = ""
     timing_ms: dict[str, float] = field(default_factory=dict)
 
+    #: 跨语言查询扩展的命中项：[(中文术语, 追加的英文等价词), ...]
+    query_expansion: list[tuple[str, str]] = field(default_factory=list)
+    #: 实际用于检索的查询文本（含扩展追加内容）；等于原查询表示未扩展
+    retrieval_query: str = ""
+
     @property
     def token_saving_ratio(self) -> float:
         """总上下文开销的节省比例（同等 k 假设下）。"""
@@ -225,6 +230,13 @@ class RouteResult:
             "library_size": self.library_size,
             "state_phase": self.state_phase,
             "retrieval_channels": self.retrieval_channels,
+            "cross_lingual": {
+                "expanded": bool(self.query_expansion),
+                "expansion": [
+                    {"zh": zh, "en": en} for zh, en in self.query_expansion
+                ],
+                "retrieval_query": self.retrieval_query or self.query,
+            },
             "cost": {
                 "baseline_meta_tokens": self.baseline_meta_tokens,
                 "injected_meta_tokens": self.injected_meta_tokens,
