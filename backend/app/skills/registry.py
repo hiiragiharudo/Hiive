@@ -85,6 +85,7 @@ class SkillRegistry:
         self.enrich_triggers: bool = False
         self._enriched_triggers: dict[str, list[str]] = {}
         self.enrichment_stats: dict[str, int] = {}
+        self.overlay_stats: dict[str, int] = {}
 
     def attach_lexicon(self, lexicon, enrich_triggers: bool = True) -> None:
         """挂载双语词典。
@@ -257,6 +258,59 @@ class SkillRegistry:
     def enriched_triggers(self, name: str) -> list[str]:
         """返回某技能被索引侧富化补入的中文触发词（供前端展示与人工审阅）。"""
         return list(self._enriched_triggers.get(name, []))
+
+    # ------------------------------------------------------------ 元数据覆盖层
+
+    def apply_overlay(self, overlay: dict[str, dict], only_missing: bool = True) -> dict:
+        """把规则推断的元数据覆盖层合并进**内存中的**技能模型。
+
+        **原始 `SKILL.md` 文件保持字节不变**——本方法只改内存对象。这样：
+        ① 不污染第三方技能库；② 原始语料与课题加工可分离，便于消融；
+        ③ 覆盖层可作为独立产物版本化与人工复核。
+
+        参数
+        ----
+        overlay
+            ``{技能名: {"phase":..., "domains":[...], "targets":[...],
+            "triggers":[...], "risk":...}}``
+        only_missing
+            **默认 True（保守策略）**：只填补语料中为空的字段，绝不覆盖语料
+            已显式声明的值。语料作者声明的元数据可信度高于规则推断；
+            若允许覆盖，规则误判会静默劣化路由，且无法从结果中察觉。
+
+        返回统计字典。
+        """
+        stats = {"skills_touched": 0, "fields_filled": 0, "fields_skipped": 0}
+        self.overlay_stats = stats
+
+        for name, patch in overlay.items():
+            skill = self.skills.get(name)
+            if skill is None:
+                continue
+            m = skill.meta
+            touched = False
+            for field_name in ("phase", "domains", "targets", "triggers"):
+                value = patch.get(field_name)
+                if not value:
+                    continue
+                current = getattr(m, field_name)
+                if current and only_missing:
+                    stats["fields_skipped"] += 1
+                    continue
+                setattr(m, field_name, value)
+                stats["fields_filled"] += 1
+                touched = True
+            risk = patch.get("risk")
+            if risk and risk != "low":
+                # risk 默认 low，只有非 low 的推断才值得写入
+                if m.risk == "low" or not only_missing:
+                    if m.risk != risk:
+                        m.risk = risk
+                        stats["fields_filled"] += 1
+                        touched = True
+            if touched:
+                stats["skills_touched"] += 1
+        return stats
 
     # ------------------------------------------------------------ 访问
 

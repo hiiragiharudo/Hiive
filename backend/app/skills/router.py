@@ -205,6 +205,7 @@ class SkillRouter:
             fused.sort(key=lambda r: (-r.rrf_score, r.doc_id))
 
         result.stage1_recall = len(fused)
+        result.stage1_ranking = [fr.doc_id for fr in fused]
         result.timing_ms["stage1"] = (time.perf_counter() - t0) * 1000.0
 
         # ---------------- 阶段二：按需加载 top-k 正文 ----------------

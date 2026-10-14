@@ -204,6 +204,13 @@ class RouteResult:
     #: 实际用于检索的查询文本（含扩展追加内容）；等于原查询表示未扩展
     retrieval_query: str = ""
 
+    #: 阶段一的完整融合排序（技能名，最多 recall_n 个）。
+    #:
+    #: **关键诊断字段**：区分"召回失败"与"排序失败"——
+    #: 若期望技能出现在此列表中却不在 top-k，说明问题在**排序/融合**，加元数据无用；
+    #: 若根本不在此列表中，才是**召回**问题。二者需要完全不同的修复方向。
+    stage1_ranking: list[str] = field(default_factory=list)
+
     @property
     def token_saving_ratio(self) -> float:
         """总上下文开销的节省比例（同等 k 假设下）。"""
