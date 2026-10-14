@@ -15,6 +15,8 @@ import type {
   BenchInfo,
   BenchMetrics,
   ContributionEntry,
+  RangeProfileInfo,
+  RangeRuntimeInfo,
   RouteResponse,
   RuleItem,
   RulesList,
@@ -169,8 +171,18 @@ export const api = {
 
   // ---------------------------------------------------------------- Agent 执行
   agentLab: () => request<AgentLabInfo>("/api/agent/lab"),
+  agentRanges: () =>
+    request<{ ranges: RangeProfileInfo[]; count: number; note: string }>(
+      "/api/agent/ranges",
+    ),
+  agentRangeDetail: (name: string, refresh = false) =>
+    request<RangeRuntimeInfo>(
+      `/api/agent/ranges/${encodeURIComponent(name)}?refresh=${refresh ? "true" : "false"}`,
+    ),
   agentRun: (body: {
     query: string;
+    /** 留空 = 离线模拟靶场；填靶场名 = 打真实靶场 */
+    target?: string;
     max_steps?: number;
     top_k?: number;
     hosts?: string[];

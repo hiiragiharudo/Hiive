@@ -1,0 +1,85 @@
+{
+  "_comment": [
+    "Pikachu 靶场的技能执行计划。",
+    "判据标记取自实测（见 eval/ranges/probe_ranges.py 与 docs/靶场环境搭建.md）。",
+    "",
+    "判据设计要点：",
+    "  1) 本靶场**会输出数据库报错**，故可用报错作判据 —— 这与 sqli-labs 不同",
+    "     （那边 @error_reporting(0) 屏蔽了报错，必须用差分法）。",
+    "  2) 断言必须精确到 'SQL syntax' 这类数据库特征：页面引用了大量 JS 资源，",
+    "     其中就有含 error 字样的文件，宽泛匹配会**假阳性**。",
+    "  3) XSS 断言的必须是**带标签的原文**（未编码），而不是探针字符串本身 ——",
+    "     否则 &lt;b&gt; 这种安全编码也会被判为 XSS。"
+  ],
+
+  "pikachu-recon-endpoints": {
+    "actions": [
+      { "method": "GET", "path": "/pikachu/" },
+      { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince", "submit": "查询" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/" },
+        "assert": { "contains": ["Pikachu"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince", "submit": "查询" } },
+        "assert": { "contains": ["vince@pikachu.com"] }
+      }
+    ],
+    "finding_kind": "endpoint-discovery",
+    "severity": "info",
+    "asset": "/pikachu/",
+    "discover_assets": [
+      { "kind": "endpoint", "value": "/pikachu/" },
+      { "kind": "endpoint", "value": "/pikachu/vul/sqli/sqli_str.php?name=" },
+      { "kind": "endpoint", "value": "/pikachu/vul/xss/xss_reflected_get.php?message=" }
+    ]
+  },
+
+  "pikachu-sqli-string": {
+    "actions": [
+      { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince", "submit": "查询" } },
+      { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince'", "submit": "查询" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince", "submit": "查询" } },
+        "assert": { "contains": ["vince@pikachu.com"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/vul/sqli/sqli_str.php", "query": { "name": "vince'", "submit": "查询" } },
+        "assert": { "contains": ["SQL syntax"] }
+      }
+    ],
+    "finding_kind": "sql-injection",
+    "severity": "high",
+    "asset": "/pikachu/vul/sqli/sqli_str.php?name="
+  },
+
+  "pikachu-xss-reflected": {
+    "actions": [
+      { "method": "GET", "path": "/pikachu/vul/xss/xss_reflected_get.php", "query": { "message": "hiive_probe_7f3a", "submit": "submit" } },
+      { "method": "GET", "path": "/pikachu/vul/xss/xss_reflected_get.php", "query": { "message": "<b>hiive_probe_7f3a</b>", "submit": "submit" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/vul/xss/xss_reflected_get.php", "query": { "message": "hiive_probe_7f3a", "submit": "submit" } },
+        "assert": { "contains": ["hiive_probe_7f3a"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/pikachu/vul/xss/xss_reflected_get.php", "query": { "message": "<b>hiive_probe_7f3a</b>", "submit": "submit" } },
+        "assert": { "contains": ["<b>hiive_probe_7f3a</b>"] }
+      }
+    ],
+    "finding_kind": "reflected-xss",
+    "severity": "medium",
+    "asset": "/pikachu/vul/xss/xss_reflected_get.php?message="
+  }
+}

@@ -78,6 +78,8 @@ class SkillService:
         self._bench_cache: dict[Path, list[BenchItem]] = {}
         self._lab_router: SkillRouter | None = None
         self._lab_plans: dict | None = None
+        #: 真实靶场运行时缓存（HttpTarget 持有会话 cookie，不能每次重建）
+        self._ranges: dict = {}
 
     # ---------------------------------------------------------------- 加载
 
@@ -271,3 +273,33 @@ class SkillService:
                 raise FileNotFoundError(f"实验靶场执行计划不存在: {plans_path}")
             self._lab_plans = load_plans(plans_path)
         return self._lab_plans
+
+    # ---------------------------------------------------------------- 真实靶场
+
+    def list_ranges(self) -> list[dict]:
+        """列出全部真实靶场定义（含就绪状态）。"""
+        from ..agent.ranges import load_profiles
+
+        return [p.to_dict() for p in load_profiles().values()]
+
+    def range_runtime(self, name: str, refresh: bool = False):
+        """取得（并缓存）某个真实靶场的运行时。
+
+        缓存是必要的：`HttpTarget` 持有 **会话 cookie**，
+        而 DVWA 的登录（含 CSRF token 与安全级别切换）不应每次请求都重做。
+        需要重置会话时传 `refresh=True`。
+        """
+        from ..agent.ranges import build_range, load_profiles
+
+        if refresh:
+            self._ranges.pop(name, None)
+        if name in self._ranges:
+            return self._ranges[name]
+
+        profiles = load_profiles()
+        if name not in profiles:
+            raise KeyError(f"未知靶场: {name}（可选: {', '.join(profiles) or '无'}）")
+        with self._lock:
+            rt = build_range(profiles[name])
+            self._ranges[name] = rt
+            return rt

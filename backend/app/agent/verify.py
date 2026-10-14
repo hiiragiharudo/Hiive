@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from .scope import ScopeViolation
@@ -59,6 +60,12 @@ class VerifyResult:
 
 
 def _req(spec: dict, default_host: str) -> HttpRequest:
+    """从判据声明构造请求。
+
+    `spec` 里可以写 `path`/`query`/`body`/`headers`（推荐，与靶场无关），
+    也可以写完整 `url`。不写 `host` 时用 `default_host`——
+    该值由调用方传入**当前目标的主机**，因此同一套判据对模拟靶场与真实靶场通用。
+    """
     if "url" in spec:
         return HttpRequest.from_url(spec.get("method", "GET"), spec["url"],
                                     headers=spec.get("headers", {}),
@@ -75,17 +82,40 @@ def _req(spec: dict, default_host: str) -> HttpRequest:
     )
 
 
-def _ev(req: HttpRequest, resp: HttpResponse) -> str:
+def _excerpt(body: str, needle: str, width: int = 60) -> str:
+    """截取 `needle` 周围的片段——**证据链要看的是命中处，不是 HTML 头**。
+
+    实测问题：早先证据只记 `body[:120]`，结果显示的是 `<!DOCTYPE html PUBLIC ...`，
+    对判定毫无价值。证据链是本平台抑制误报的关键，必须能自证结论。
+    """
+    i = body.find(needle)
+    if i < 0:
+        return ""
+    s = max(0, i - width)
+    e = min(len(body), i + len(needle) + width)
+    frag = re.sub(r"\s+", " ", body[s:e]).strip()
+    return ("…" if s > 0 else "") + frag + ("…" if e < len(body) else "")
+
+
+def _ev(req: HttpRequest, resp: HttpResponse, note: str = "") -> str:
+    """构造证据行：请求 → 状态 → 关键片段。
+
+    `note` 用于携带"命中了什么"或"未命中了什么"，让证据自证结论。
+    """
     head = f"{req.method} {req.url} -> {resp.status}"
     if resp.blocked:
         head += " [作用域拦截]"
-    return f"{head} | body[:120]={resp.body[:120]!r}"
+    parts = [head, f"len={len(resp.body)}"]
+    if note:
+        parts.append(note)
+    return " | ".join(parts)
 
 
 def evaluate_predicate(
-    pred: dict, target: SimulatedTarget, default_host: str = SimulatedTarget.HOST
+    pred: dict, target: SimulatedTarget, default_host: str | None = None
 ) -> VerifyResult:
     """求值单条判据。**任何异常都转为"未通过"**，绝不向上抛。"""
+    host = default_host or SimulatedTarget.HOST
     kind = str(pred.get("kind", ""))
     if kind not in ALLOWED_KINDS:
         return VerifyResult(
@@ -96,12 +126,12 @@ def evaluate_predicate(
 
     try:
         if kind == "http_status":
-            return _p_http_status(pred, target, default_host)
+            return _p_http_status(pred, target, host)
         if kind == "http_diff":
-            return _p_http_diff(pred, target, default_host)
+            return _p_http_diff(pred, target, host)
         if kind == "body_contains":
-            return _p_body_contains(pred, target, default_host)
-        return _p_header_present(pred, target, default_host)
+            return _p_body_contains(pred, target, host)
+        return _p_header_present(pred, target, host)
     except ScopeViolation as e:
         return VerifyResult(kind=kind, passed=False, detail=f"作用域拒绝: {e}")
     except (KeyError, TypeError, ValueError) as e:
@@ -157,20 +187,31 @@ def _p_body_contains(pred: dict, t: SimulatedTarget, host: str) -> VerifyResult:
     req = _req(pred.get("request", {}), host)
     resp = t.handle(req)
     a = pred.get("assert", {})
-    ev = [_ev(req, resp)]
 
     if resp.blocked:
-        return VerifyResult("body_contains", False, "请求被作用域拦截", ev)
+        return VerifyResult("body_contains", False, "请求被作用域拦截",
+                            [_ev(req, resp)])
 
     for needle in a.get("contains", []) or []:
         if needle not in resp.body:
             return VerifyResult("body_contains", False,
-                                f"响应体未包含 {needle!r}", ev)
+                                f"响应体未包含 {needle!r}",
+                                [_ev(req, resp, f"未找到 {needle!r}")])
+        # 命中：证据里带出命中处上下文
+        return VerifyResult("body_contains", True,
+                            f"响应体包含 {needle!r}",
+                            [_ev(req, resp, f"命中 {_excerpt(resp.body, needle)!r}")])
+
     for needle in a.get("not_contains", []) or []:
         if needle in resp.body:
             return VerifyResult("body_contains", False,
-                                f"响应体意外包含 {needle!r}", ev)
-    return VerifyResult("body_contains", True, "响应体内容满足断言", ev)
+                                f"响应体意外包含 {needle!r}",
+                                [_ev(req, resp, f"却出现 {_excerpt(resp.body, needle)!r}")])
+        return VerifyResult("body_contains", True,
+                            f"响应体不含 {needle!r}（符合预期）",
+                            [_ev(req, resp, f"确认不含 {needle!r}")])
+
+    return VerifyResult("body_contains", True, "响应体内容满足断言", [_ev(req, resp)])
 
 
 def _p_header_present(pred: dict, t: SimulatedTarget, host: str) -> VerifyResult:
@@ -190,15 +231,22 @@ def _p_header_present(pred: dict, t: SimulatedTarget, host: str) -> VerifyResult
 
 
 def evaluate_predicates(
-    preds: list[dict], target: SimulatedTarget, require_all: bool = True
+    preds: list[dict],
+    target: SimulatedTarget,
+    require_all: bool = True,
+    default_host: str | None = None,
 ) -> tuple[bool, list[VerifyResult]]:
     """求值一组判据。
 
     `require_all=True`（默认）时**全部通过才算通过**——保守策略：
     宁可漏报也不要误报，因为"发现"的代价（执行不相关攻击性技能、稀释报告可信度）
     高于"漏报"。
+
+    `default_host` 由调用方传入**当前目标的主机**（模拟靶场或真实靶场），
+    使同一套判据对两者通用。缺省时退回 `SimulatedTarget.HOST`。
     """
-    results = [evaluate_predicate(p, target) for p in preds]
+    host = default_host or SimulatedTarget.HOST
+    results = [evaluate_predicate(p, target, default_host=host) for p in preds]
     if not results:
         return False, results
     passed = all(r.passed for r in results) if require_all else any(r.passed for r in results)

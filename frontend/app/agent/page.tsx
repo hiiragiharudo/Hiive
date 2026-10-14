@@ -3,10 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, api } from "@/lib/api";
-import type { AgentLabInfo, AgentRunResult } from "@/lib/types";
+import type {
+  AgentLabInfo,
+  AgentRunResult,
+  RangeProfileInfo,
+  RangeRuntimeInfo,
+} from "@/lib/types";
 
-/** 预置场景——覆盖正常流程、假阳性抑制、越界拦截三种情况。 */
-const PRESETS: { label: string; note: string; query: string; wrongScope?: boolean }[] = [
+/** 离线模拟靶场的预置场景。 */
+const LAB_PRESETS: { label: string; note: string; query: string; wrongScope?: boolean }[] = [
   {
     label: "正常流程",
     note: "端点枚举 + 水平越权 + 后台访问控制绕过",
@@ -30,12 +35,34 @@ const PRESETS: { label: string; note: string; query: string; wrongScope?: boolea
   },
 ];
 
+/** 真实靶场的预置场景（打本机 XAMPP 上的漏洞演练环境）。 */
+const RANGE_PRESETS: Record<string, { label: string; query: string }[]> = {
+  "sqli-labs": [
+    { label: "端点侦察 + GET 注入", query: "先做端点侦察，然后测试 GET 参数的 SQL 注入" },
+    { label: "登录框注入绕过", query: "测试登录框的 SQL 注入与认证绕过" },
+  ],
+  pikachu: [
+    { label: "端点侦察", query: "先做端点侦察" },
+    { label: "SQL 注入", query: "测试 SQL 注入" },
+    { label: "反射型 XSS", query: "测试反射型 XSS" },
+  ],
+  dvwa: [
+    { label: "模块侦察", query: "登录后确认会话并侦察模块入口" },
+    { label: "SQL 注入模块", query: "测试 SQL 注入模块" },
+    { label: "反射型 XSS", query: "测试反射型 XSS" },
+  ],
+};
+
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
 
 export default function AgentPage() {
   const [lab, setLab] = useState<AgentLabInfo | null>(null);
+  const [ranges, setRanges] = useState<RangeProfileInfo[]>([]);
+  const [rangeDetail, setRangeDetail] = useState<RangeRuntimeInfo | null>(null);
+  /** 空字符串 = 离线模拟靶场；否则为真实靶场名 */
+  const [target, setTarget] = useState("");
   const [result, setResult] = useState<AgentRunResult | null>(null);
-  const [query, setQuery] = useState(PRESETS[0].query);
+  const [query, setQuery] = useState(LAB_PRESETS[0].query);
   const [hosts, setHosts] = useState("");
   const [maxSteps, setMaxSteps] = useState(10);
   const [topK, setTopK] = useState(5);
@@ -50,11 +77,30 @@ export default function AgentPage() {
         setLab(d);
         setHosts(d.target_host);
       })
-      .catch((e: Error) => setError(e instanceof ApiError ? e.message : String(e)));
+      .catch(() => setLab(null));
+    api
+      .agentRanges()
+      .then((d) => setRanges(d.ranges.filter((r) => r.exists)))
+      .catch(() => setRanges([]));
   }, []);
 
+  // 切换目标时刷新该靶场的详情（技能、登录状态、警告）
+  useEffect(() => {
+    if (!target) {
+      setRangeDetail(null);
+      return;
+    }
+    api
+      .agentRangeDetail(target)
+      .then(setRangeDetail)
+      .catch((e: Error) => {
+        setRangeDetail(null);
+        setError(e instanceof ApiError ? e.message : String(e));
+      });
+  }, [target]);
+
   const run = useCallback(
-    async (q: string, overrideHosts?: string[]) => {
+    async (q: string, overrideHosts?: string[], overrideTarget?: string) => {
       if (!q.trim()) {
         setError("请输入任务描述");
         return;
@@ -62,13 +108,15 @@ export default function AgentPage() {
       setBusy(true);
       setError("");
       try {
+        const t = overrideTarget !== undefined ? overrideTarget : target;
         const hostList = (overrideHosts ?? hosts.split(",").map((h) => h.trim()))
           .filter(Boolean);
         const r = await api.agentRun({
           query: q,
+          target: t,
           max_steps: maxSteps,
           top_k: topK,
-          hosts: hostList.length ? hostList : undefined,
+          hosts: t ? undefined : (hostList.length ? hostList : undefined),
           max_blocked_calls: maxBlocked,
         });
         setResult(r);
@@ -79,8 +127,12 @@ export default function AgentPage() {
         setBusy(false);
       }
     },
-    [hosts, maxSteps, topK, maxBlocked],
+    [hosts, maxSteps, topK, maxBlocked, target],
   );
+
+  const presets = target
+    ? (RANGE_PRESETS[target] ?? [{ label: "运行", query: "测试目标" }])
+    : LAB_PRESETS;
 
   const sortedFindings = result
     ? [...result.graph.findings].sort(
@@ -102,11 +154,15 @@ export default function AgentPage() {
           </span>
         </h2>
         <div className="notice warn">
-          <b>先说清楚"挖洞结果"从哪来。</b>
-          本项目<b>不对任何真实目标发起请求</b>（学术与法律红线）。
-          全部结果来自 <code>backend/app/agent/target.py</code> 里的
-          <b>进程内模拟靶场</b>：不监听端口、无网络 IO、不含可用 exploit，
-          漏洞是<b>刻意植入且已知</b>的，因而构成客观真值（ground truth）。
+          <b>两种目标，结果都来自真实执行。</b>
+          <br />
+          <b>① 离线模拟靶场</b>（默认）：<code>backend/app/agent/target.py</code> 里的
+          进程内模拟服务，不监听端口、无网络 IO、不含可用 exploit，
+          漏洞是刻意植入且已知的，因而构成客观真值。
+          <br />
+          <b>② 真实靶场</b>：本机 XAMPP 上运行的
+          <b> sqli-labs / DVWA / Pikachu</b>——真实可攻击的 PHP 应用，
+          <b>全部请求指向 localhost</b>，不涉及任何线上目标。
           <br />
           <br />
           <b>判定流程</b>：技能执行动作 → <b>确定性验证判据</b>求值（不调用 LLM）→
@@ -114,7 +170,7 @@ export default function AgentPage() {
           <b>技能声称有问题 ≠ 真有问题</b>——这是抑制误报的系统层机制。
         </div>
 
-        {lab && (
+        {lab && !target && (
           <>
             <h3>靶场植入的漏洞（客观真值）</h3>
             <table>
@@ -139,9 +195,95 @@ export default function AgentPage() {
             </div>
           </>
         )}
+
+        {target && rangeDetail && (
+          <>
+            <h3>
+              {rangeDetail.profile.label}
+              <span className="dim small" style={{ fontWeight: 400, marginLeft: 10 }}>
+                {rangeDetail.target.base_url} ｜ 节流 {rangeDetail.target.delay}s ｜
+                超时 {rangeDetail.target.timeout}s
+              </span>
+            </h3>
+            <div className="small dim">{rangeDetail.profile.note}</div>
+            <div className="metrics mt">
+              <div className="metric">
+                <div className="k">技能数</div>
+                <div className="v">{rangeDetail.skill_count}</div>
+              </div>
+              <div className="metric">
+                <div className="k">登录</div>
+                <div className={`v small ${rangeDetail.login_ok ? "ok" : ""}`}>
+                  {rangeDetail.profile.requires_login
+                    ? rangeDetail.login_ok
+                      ? "已登录"
+                      : "未登录"
+                    : "不需要"}
+                </div>
+              </div>
+            </div>
+            <div className="pill-list mt">
+              {rangeDetail.skills.map((s) => (
+                <span key={s} className="badge">
+                  {s}
+                </span>
+              ))}
+            </div>
+            {rangeDetail.login_detail && (
+              <div className="small dim mt">{rangeDetail.login_detail}</div>
+            )}
+            {rangeDetail.warnings.map((w, i) => (
+              <div key={i} className="notice warn small mt">
+                ⚠ {w}
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {/* ---------------------------------------------------------- 控制 */}
+      <div className="card">
+        <h2>
+          选择目标
+          <span className="dim small" style={{ fontWeight: 400, marginLeft: 10 }}>
+            离线模拟靶场，或本机 XAMPP 上运行的真实漏洞靶场
+          </span>
+        </h2>
+        <div className="pill-list">
+          <button
+            className={target === "" ? "primary" : ""}
+            disabled={busy}
+            onClick={() => {
+              setTarget("");
+              setQuery(LAB_PRESETS[0].query);
+            }}
+          >
+            离线模拟靶场
+          </button>
+          {ranges.map((r) => (
+            <button
+              key={r.name}
+              className={target === r.name ? "primary" : ""}
+              title={r.note}
+              disabled={busy}
+              onClick={() => {
+                setTarget(r.name);
+                const first = RANGE_PRESETS[r.name]?.[0];
+                if (first) setQuery(first.query);
+              }}
+            >
+              {r.label}
+              {r.requires_login && <span className="dim"> (需登录)</span>}
+            </button>
+          ))}
+        </div>
+        <div className="small dim mt">
+          真实靶场是本机 <span className="mono">localhost</span> 上的漏洞演练环境，
+          请求<b>不涉及任何线上目标</b>。搭建与踩坑记录见{" "}
+          <span className="mono">docs/靶场环境搭建.md</span>。
+        </div>
+      </div>
+
       <div className="card">
         <h2>运行任务</h2>
         <label className="field">
@@ -150,10 +292,12 @@ export default function AgentPage() {
         </label>
 
         <div className="row">
-          <label className="field">
-            <span>授权主机（逗号分隔；填错即全被拦截）</span>
-            <input type="text" value={hosts} onChange={(e) => setHosts(e.target.value)} />
-          </label>
+          {!target && (
+            <label className="field">
+              <span>授权主机（逗号分隔；填错即全被拦截）</span>
+              <input type="text" value={hosts} onChange={(e) => setHosts(e.target.value)} />
+            </label>
+          )}
           <label className="field">
             <span>最大步数</span>
             <input
@@ -187,26 +331,36 @@ export default function AgentPage() {
         </div>
 
         <div className="pill-list">
-          {PRESETS.map((p) => (
-            <button
-              key={p.label}
-              title={p.note}
-              disabled={busy}
-              onClick={() => {
-                setQuery(p.query);
-                void run(p.query, p.wrongScope ? ["wrong-host.local"] : [lab?.target_host ?? "lab.local"]);
-              }}
-            >
-              {busy ? "…" : p.label}
-            </button>
-          ))}
+          {presets.map((p) => {
+            const wrongScope = "wrongScope" in p && Boolean(p.wrongScope);
+            const note = "note" in p ? String(p.note ?? "") : "";
+            return (
+              <button
+                key={p.label}
+                title={note || p.query}
+                disabled={busy}
+                onClick={() => {
+                  setQuery(p.query);
+                  void run(
+                    p.query,
+                    wrongScope
+                      ? ["wrong-host.local"]
+                      : [lab?.target_host ?? "lab.local"],
+                  );
+                }}
+              >
+                {busy ? "…" : p.label}
+              </button>
+            );
+          })}
           <button className="primary" disabled={busy} onClick={() => void run(query)}>
             {busy ? "执行中…" : "运行"}
           </button>
         </div>
         <div className="small dim mt">
-          预置场景分别演示：① 正常发现流程 ② <b>假阳性被验证门控拒绝</b>
-          ③ 跑满所有技能 ④ <b>越界拦截与熔断</b>。
+          {target
+            ? "预置任务针对该靶场编写。真实靶场的技能包与验证判据是为它单独写的——判据里的回显标记全部来自实测。"
+            : "预置场景分别演示：① 正常发现流程 ② 假阳性被验证门控拒绝 ③ 跑满所有技能 ④ 越界拦截与熔断。"}
         </div>
       </div>
 
@@ -215,6 +369,33 @@ export default function AgentPage() {
         <>
           <div className="card">
             <h2>执行摘要</h2>
+            <div className="notice ok small" style={{ marginBottom: 12 }}>
+              <b>目标</b>：{result.target_info.label}
+              {result.target_info.base_url && (
+                <span className="mono dim"> · {result.target_info.base_url}</span>
+              )}
+              {result.target_info.kind === "range" && (
+                <>
+                  {" ｜ "}
+                  <b>登录</b>：
+                  {result.target_info.login_ok ? "已建立会话" : "未登录"}
+                  <br />
+                  <span className="dim">
+                    真实靶场，请求全部指向本机 localhost，不涉及线上目标。
+                  </span>
+                </>
+              )}
+              {!!result.target_info.warnings?.length && (
+                <>
+                  <br />
+                  {result.target_info.warnings.map((w, i) => (
+                    <span key={i} style={{ color: "var(--warn)" }}>
+                      ⚠ {w}
+                    </span>
+                  ))}
+                </>
+              )}
+            </div>
             <div className="metrics">
               <div className="metric">
                 <div className="k">执行步数</div>

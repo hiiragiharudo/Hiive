@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "靶场定义。相对本文件所在目录解析。",
+    "本机环境与踩坑记录见 docs/靶场环境搭建.md。",
+    "login 字段用声明式表达「打模块前需要先登录」——DVWA 属于这一类。"
+  ],
+
+  "sqli-labs": {
+    "label": "sqli-labs（SQL 注入专项，65 关）",
+    "base_url": "http://localhost",
+    "host": "localhost",
+    "skills_dir": "sqli-labs/skills",
+    "plans_path": "sqli-labs/plans.json",
+    "note": "GET 字符型注入 + POST 登录框注入。判据用差分法（该靶场屏蔽了 SQL 报错）。",
+    "login": null
+  },
+
+  "pikachu": {
+    "label": "Pikachu（综合靶场）",
+    "base_url": "http://localhost",
+    "host": "localhost",
+    "skills_dir": "pikachu/skills",
+    "plans_path": "pikachu/plans.json",
+    "note": "SQL 注入 / 反射型 XSS / 文件包含等。默认账号 admin/123456。",
+    "login": null
+  },
+
+  "dvwa": {
+    "label": "DVWA（15 个模块）",
+    "base_url": "http://localhost",
+    "host": "localhost",
+    "skills_dir": "dvwa/skills",
+    "plans_path": "dvwa/plans.json",
+    "note": "必须先登录再打模块，且安全级别须为 low（impossible 下模块不可利用）。",
+    "login": {
+      "_comment": "DVWA 的 login.php 调 checkToken()：必须先从页面取 user_token 再 POST，否则静默失败。",
+      "token": {
+        "method": "GET",
+        "path": "/DVWA/login.php",
+        "regex": "name=[\"']user_token[\"']\\s+value=[\"']([^\"']+)[\"']"
+      },
+      "method": "POST",
+      "path": "/DVWA/login.php",
+      "body": {
+        "username": "admin",
+        "password": "password",
+        "Login": "Login"
+      },
+      "body_from_token": "user_token",
+      "success_status_in": [301, 302, 303],
+      "success_contains": null,
+      "_success_note": "DVWA 登录成功返回 302 重定向；适配器默认不跟随重定向，故 body 为空。只按 success_contains 判定会误报失败 —— 用 status 判定。",
+      "then": {
+        "_comment": "登录后把安全级别切到 low —— 否则各模块给出的是「不可利用」的实现。",
+        "token": {
+          "method": "GET",
+          "path": "/DVWA/security.php",
+          "regex": "name=[\"']user_token[\"']\\s+value=[\"']([^\"']+)[\"']"
+        },
+        "method": "POST",
+        "path": "/DVWA/security.php",
+        "body": { "security": "low", "seclev_submit": "Submit" },
+        "body_from_token": "user_token"
+      }
+    }
+  }
+}

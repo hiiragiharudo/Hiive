@@ -333,9 +333,53 @@ export interface ContributionEntry {
   hit_rate: number;
 }
 
+export interface RangeProfileInfo {
+  name: string;
+  label: string;
+  base_url: string;
+  host: string;
+  skills_dir: string;
+  plans_path: string;
+  note: string;
+  requires_login: boolean;
+  exists: boolean;
+}
+
+export interface RangeRuntimeInfo {
+  profile: RangeProfileInfo;
+  target: {
+    kind: string;
+    base_url: string;
+    host: string;
+    delay: number;
+    timeout: number;
+    calls: number;
+    cookies: string[];
+  };
+  skills: string[];
+  skill_count: number;
+  plans: string[];
+  login_ok: boolean;
+  login_detail: string;
+  warnings: string[];
+}
+
+export interface TargetInfo {
+  kind: "simulated" | "range";
+  name: string;
+  label: string;
+  base_url: string;
+  login_ok?: boolean;
+  login_detail?: string;
+  warnings?: string[];
+  note?: string;
+}
+
 export interface AgentRunResult {
   task_id: string;
   query: string;
+  /** 本次使用的目标说明（真实靶场含登录状态与警告） */
+  target_info: TargetInfo;
   graph: {
     target: string;
     phase: string;

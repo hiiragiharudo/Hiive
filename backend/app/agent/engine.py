@@ -223,7 +223,11 @@ class AgentEngine:
 
             # ---- 验证判据（确定性） ----
             if plan.verify:
-                passed, results = evaluate_predicates(plan.verify, self.target)
+                # default_host 必须取自**当前目标**，而不是硬编码的模拟靶场主机——
+                # 否则打真实靶场时判据里的请求会落到错误的主机上。
+                passed, results = evaluate_predicates(
+                    plan.verify, self.target, default_host=self.target.HOST
+                )
                 rec.verify_results = results
                 rec.verified = passed
                 if passed:

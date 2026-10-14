@@ -1,36 +1,42 @@
-"""离线模拟靶场：植入已知漏洞的**确定性** HTTP 服务。
+"""目标适配层：模拟靶场。
 
-## 为什么需要它
+## 统一接口
 
-毕设有"实验验证"章节，必须有可复现的评测环境。真实靶场（DVWA、Juice Shop）
-需要 Docker 与网络；而本课题的评测要求是**离线、零成本、可复现**。
+本模块定义 `Target` 协议——**模拟靶场与真实靶场必须实现同一接口**，
+这样验证判据 DSL（`verify.py`）与技能执行计划对两者**完全通用**，
+无需为"打模拟靶场"和"打真靶场"写两套代码。
 
-因此实现一个进程内的确定性靶场：给定输入必然产生相同输出，
-漏洞是**刻意植入且已知**的，因而构成客观真值（ground truth）。
+| 实现 | 用途 |
+|---|---|
+| `SimulatedTarget`（本模块） | 离线、确定性、无网络 IO。用于单元测试与无靶场时演示 |
+| `HttpTarget`（`http_target.py`） | 真实 HTTP。用于打 sqli-labs / DVWA / Pikachu 等真实靶场 |
 
-## 明确边界
+## 明确边界（SimulatedTarget）
 
-- 本靶场**不监听任何端口**，不做真实网络 IO，仅作函数调用；
+- **不监听任何端口**，不做真实网络 IO，仅作函数调用；
 - 漏洞是**模拟**的（例如"两个订单返回不同 owner"），不包含可用 exploit；
-- 它服务于"验证判据是否被正确执行"的测试，而非训练攻击能力。
-
-## 植入的漏洞类别
-
-| 端点 | 类别 | 说明 |
-|---|---|---|
-| `GET /api/orders/{id}` | 水平越权（IDOR/BOLA） | 不同 id 返回不同属主的订单，且不校验属主 |
-| `GET /admin/users` | 访问控制缺陷 | 无凭证返回 403，带 `X-Original-URL` 头可绕过 |
-| `GET /search?q=` | 反射型 XSS | 查询串被原样反射进 body |
-| `POST /upload` | 不安全文件上传 | `filename` 以 `.php` 结尾即接受 |
-| `GET /static/` | 目录遍历 | `file=../../etc/passwd` 被"读"出 |
+- 它服务于"机制是否正确"的测试，而非"能否真的打进去"。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
 from .scope import Scope, ScopeViolation
+
+
+@runtime_checkable
+class Target(Protocol):
+    """目标适配器协议。模拟靶场与真实 HTTP 靶场都实现它。"""
+
+    HOST: str
+
+    def handle(self, req: "HttpRequest") -> "HttpResponse":
+        """处理请求并返回响应。**越界请求必须返回 `blocked=True` 而非抛异常**，
+        以便调用方继续处理且越界事实不丢失。"""
+        ...
 
 
 @dataclass

