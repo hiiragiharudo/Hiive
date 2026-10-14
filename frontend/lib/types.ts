@@ -245,3 +245,129 @@ export interface AttachedRule {
   summary: string;
   estimated_tokens: number;
 }
+
+// ---------------------------------------------------------------- Agent 执行
+
+export interface LabRoute {
+  name: string;
+  method: string;
+  path: string;
+  status: number;
+}
+
+export interface AgentLabInfo {
+  skills_dir: string;
+  plans_path: string;
+  skills: string[];
+  skill_count: number;
+  plans: string[];
+  target_host: string;
+  routes: LabRoute[];
+  /** 植入的漏洞：端点 -> 说明 */
+  planted: Record<string, string>;
+  note: string;
+}
+
+export interface AgentFinding {
+  skill: string;
+  kind: string;
+  asset: string;
+  severity: string;
+  verified: boolean;
+  evidence: string[];
+  detail: string;
+}
+
+export interface AgentCandidate {
+  skill: string;
+  kind: string;
+  asset: string;
+  reason: string;
+  rejected_reason: string;
+}
+
+export interface AgentAsset {
+  kind: string;
+  value: string;
+  tested: boolean;
+  discovered_by: string;
+  meta: Record<string, unknown>;
+}
+
+export interface VerifyOutcome {
+  kind: string;
+  passed: boolean;
+  detail: string;
+  evidence: string[];
+}
+
+export interface AgentStep {
+  step: number;
+  skill: string;
+  phase: string;
+  route_score: number;
+  route_reason: string;
+  /** executed / skipped_no_plan */
+  outcome: string;
+  skipped_reason: string;
+  actions: { method?: string; path?: string; query?: Record<string, string>; body?: Record<string, string> }[];
+  tool_calls: number;
+  blocked_calls: number;
+  verify: VerifyOutcome[];
+  verified: boolean;
+  finding_kind: string;
+  rejected_reason: string;
+  new_assets: number;
+  cost_tokens: number;
+}
+
+export interface ContributionEntry {
+  executed: number;
+  skipped: number;
+  verified: number;
+  rejected: number;
+  tool_calls: number;
+  blocked_calls: number;
+  cost_tokens: number;
+  reject_reasons: string[];
+  hit_rate: number;
+}
+
+export interface AgentRunResult {
+  task_id: string;
+  query: string;
+  graph: {
+    target: string;
+    phase: string;
+    step: number;
+    assets: AgentAsset[];
+    asset_count: number;
+    findings: AgentFinding[];
+    candidates: AgentCandidate[];
+    executed_skills: string[];
+    verified_count: number;
+  };
+  trace: {
+    task_id: string;
+    query: string;
+    terminated_reason: string;
+    step_count: number;
+    steps: AgentStep[];
+    contribution: Record<string, ContributionEntry>;
+  };
+  routings: RouteResponse[];
+  scope: Record<string, unknown>;
+  tools: {
+    calls: number;
+    blocked: number;
+    detail: { tool: string; args: Record<string, unknown>; status: number; blocked: boolean; error: string; evidence: string }[];
+  };
+  summary: {
+    steps: number;
+    verified_findings: number;
+    candidates_rejected: number;
+    assets: number;
+    blocked_calls: number;
+    terminated_reason: string;
+  };
+}

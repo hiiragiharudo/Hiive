@@ -6,10 +6,15 @@
  */
 
 import type {
+  AgentCandidate,
+  AgentFinding,
+  AgentLabInfo,
+  AgentRunResult,
   ArbitrationOutcome,
   ArbitrationTable,
   BenchInfo,
   BenchMetrics,
+  ContributionEntry,
   RouteResponse,
   RuleItem,
   RulesList,
@@ -161,4 +166,23 @@ export const api = {
       method: "POST",
     });
   },
+
+  // ---------------------------------------------------------------- Agent 执行
+  agentLab: () => request<AgentLabInfo>("/api/agent/lab"),
+  agentRun: (body: {
+    query: string;
+    max_steps?: number;
+    top_k?: number;
+    hosts?: string[];
+    max_blocked_calls?: number;
+  }) => request<AgentRunResult>("/api/agent/run", { method: "POST", body: JSON.stringify(body) }),
+  agentContribution: (q: string) =>
+    request<{
+      query: string;
+      contribution: Record<string, ContributionEntry>;
+      verified_findings: AgentFinding[];
+      rejected_candidates: AgentCandidate[];
+      terminated_reason: string;
+      summary: AgentRunResult["summary"];
+    }>(`/api/agent/contribution?q=${encodeURIComponent(q)}`),
 };
