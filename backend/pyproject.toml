@@ -1,0 +1,26 @@
+[project]
+name = "hiive-backend"
+version = "0.1.0"
+description = "Hiive —— 技能驱动的 AI 渗透测试平台后端（技能引擎 / Agent 执行 / 评测闭环）"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+# 向量通道使用 LSA（截断 SVD）时需要；缺失时自动降级到纯标准库 TF-IDF
+vector = ["numpy>=2.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+# 使 `from app.skills import ...` 在 backend/ 目录下可直接使用
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
