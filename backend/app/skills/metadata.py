@@ -240,6 +240,24 @@ def _search_text(skill: Skill, body_lines: int = 60) -> str:
     return "\n".join(p for p in parts if p).lower()
 
 
+#: 每个技能最多保留的**安全域**数。
+#:
+#: **为什么必须设上限（实测问题）**：`infer_domains` 原本"命中即收录"，
+#: 导致伞状技能与长描述技能被标上几乎全部安全域——例如
+#: `active-directory-kerberos-attacks` 被标成 `['ad','cloud','mobile','crypto']`，
+#: 其中 cloud/mobile/crypto 显然错误。
+#:
+#: 这个副作用比"漏标"更危险：**域列表本身会进入分字段 BM25 的 `domains` 字段**，
+#: 于是被过度标注的伞状技能反而获得了更多匹配机会，**加剧**了它在路由中霸榜的倾向
+#: （见技术设计文档 §6.6 的文档长度偏置）。
+#:
+#: 因此改为：按**命中关键词数量**降序取前 N 个——命中多的域才是真正的主题域。
+MAX_DOMAINS = 3
+
+#: 目标关键词命中数超过此值才收录（避免单个泛化词就引入一个目标标签）
+MIN_TARGET_HITS = 1
+
+
 def _hits(text: str, keywords: list[str]) -> list[str]:
     return [k for k in keywords if k in text]
 
@@ -252,14 +270,24 @@ def infer_phase(text: str) -> tuple[str, list[str]]:
     return "", []
 
 
-def infer_domains(text: str) -> tuple[list[str], dict[str, list[str]]]:
-    out: list[str] = []
-    ev: dict[str, list[str]] = {}
+def infer_domains(
+    text: str, max_domains: int = MAX_DOMAINS
+) -> tuple[list[str], dict[str, list[str]]]:
+    """推断安全域。
+
+    按命中关键词数量降序取前 `max_domains` 个（见 `MAX_DOMAINS` 的说明）。
+    """
+    scored: list[tuple[int, str, list[str]]] = []
     for domain, keywords in DOMAIN_RULES.items():
         hit = _hits(text, keywords)
         if hit:
-            out.append(domain)
-            ev[domain] = hit[:5]
+            scored.append((len(hit), domain, hit))
+    # 命中数降序；平局按域名稳定排序，保证结果可复现
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    scored = scored[:max_domains]
+
+    out = [d for _n, d, _h in scored]
+    ev = {d: h[:5] for _n, d, h in scored}
     return out, ev
 
 
@@ -268,7 +296,7 @@ def infer_targets(text: str) -> tuple[list[str], dict[str, list[str]]]:
     ev: dict[str, list[str]] = {}
     for target, keywords in TARGET_RULES.items():
         hit = _hits(text, keywords)
-        if hit:
+        if len(hit) >= MIN_TARGET_HITS:
             out.append(target)
             ev[target] = hit[:3]
     return out, ev

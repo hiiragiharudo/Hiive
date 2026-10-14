@@ -211,6 +211,8 @@ class SkillRouter:
 
         fused = rrf_fuse(channel_results, k=cfg.rrf_k, weights=cfg.weights)
         if not fused:
+            # 两通道均无命中 → 弃权（语义与"阈值过滤后为空"统一）
+            result.abstained = True
             result.timing_ms["stage1"] = (time.perf_counter() - t0) * 1000.0
             return result
 
@@ -289,6 +291,11 @@ class SkillRouter:
         result.body_tokens = body_tokens
         result.baseline_tokens = result.baseline_meta_tokens + body_tokens
         result.injected_tokens = injected_meta + body_tokens
+
+        # 语义统一：候选为空即视为弃权（无论是因为阈值过滤，还是两通道均无命中）。
+        # 这样"弃权"在评估中只有一个含义：**没有返回任何技能**。
+        if not result.candidates:
+            result.abstained = True
 
         result.timing_ms["stage2"] = (time.perf_counter() - t1) * 1000.0
         return result

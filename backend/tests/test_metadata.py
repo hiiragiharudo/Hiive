@@ -135,6 +135,32 @@ def test_domain_rules_cover_required_domains():
         assert DOMAIN_RULES[d]
 
 
+def test_infer_domains_caps_by_hit_count():
+    """过度标注域会加剧伞状技能霸榜，必须按命中数截断。
+
+    实测问题：`active-directory-kerberos-attacks` 曾被标成
+    `['ad','cloud','mobile','crypto']`（命中即收录），其中 cloud/mobile/crypto 错误。
+    """
+    from app.skills.metadata import MAX_DOMAINS, infer_domains
+
+    text = ("active directory kerberos kerberoasting ntlm ldap adcs "
+            "aws cloud metadata s3 docker kubernetes android apk ios rsa aes")
+    domains, ev = infer_domains(text)
+    assert len(domains) <= MAX_DOMAINS, f"域数应被截断到 {MAX_DOMAINS}，实际 {len(domains)}"
+    # 命中关键词最多的域必须排第一（ad 有 kerberos/kerberoasting/ntlm/ldap/adcs 等）
+    assert domains[0] == "ad", f"命中数最多的域应排首位，实际 {domains}"
+    # 依据只记录被保留的域
+    assert set(ev) == set(domains)
+
+
+def test_infer_domains_tie_break_is_deterministic():
+    from app.skills.metadata import infer_domains
+
+    a, _ = infer_domains("api web")   # 各命中 1 个
+    b, _ = infer_domains("api web")
+    assert a == b, "平局时应稳定排序，保证可复现"
+
+
 def test_target_rules_cover_common_stacks():
     for t in ("wordpress", "spring", "nginx", "graphql", "jwt", "kubernetes"):
         assert t in TARGET_RULES, f"缺少目标规则: {t}"
