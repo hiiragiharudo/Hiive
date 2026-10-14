@@ -325,6 +325,82 @@ def test_bench_run_rejects_missing_file(client: TestClient):
     assert r.status_code == 404
 
 
+# --------------------------------------------------------------------- agent
+
+
+def test_agent_lab_info(client: TestClient):
+    r = client.get("/api/agent/lab")
+    if r.status_code == 404:
+        pytest.skip("实验靶场不存在")
+    d = r.json()
+    assert d["target_host"] == "lab.local"
+    assert d["skill_count"] >= 5
+    assert set(d["skills"]) == set(d["plans"]), "靶场技能与执行计划必须一一对应"
+    assert "GET /api/orders/{id}" in d["planted"]
+
+
+def test_agent_run_end_to_end(client: TestClient):
+    if client.get("/api/agent/lab").status_code == 404:
+        pytest.skip("实验靶场不存在")
+    r = client.post("/api/agent/run",
+                    json={"query": "端点枚举，然后测试水平越权和后台访问控制绕过",
+                          "max_steps": 10, "top_k": 5})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["summary"]["steps"] >= 1
+    kinds = {f["kind"] for f in d["graph"]["findings"]}
+    assert "bola" in kinds, f"应验证出水平越权，实际 {kinds}"
+    # 每个经验证的发现都要有证据链
+    for f in d["graph"]["findings"]:
+        assert f["verified"] is True
+        assert f["evidence"], "经验证的发现必须带证据"
+    # 每个执行步都要有验证结果留痕
+    for s in d["trace"]["steps"]:
+        if s["outcome"] == "executed":
+            assert s["actions"] and s["verify"]
+    assert "contribution" in d["trace"]
+
+
+def test_agent_run_rejects_false_positive(client: TestClient):
+    if client.get("/api/agent/lab").status_code == 404:
+        pytest.skip("实验靶场不存在")
+    d = client.post("/api/agent/run",
+                    json={"query": "测试搜索框的 SQL 注入", "max_steps": 12,
+                          "top_k": 6}).json()
+    verified = {f["kind"] for f in d["graph"]["findings"]}
+    assert "sql-injection" not in verified, "判据未通过不得成为发现"
+
+
+def test_agent_run_scope_block_and_circuit_breaker(client: TestClient):
+    """把授权主机填错 → 全部请求被拦截，且越界熔断会中止任务。"""
+    if client.get("/api/agent/lab").status_code == 404:
+        pytest.skip("实验靶场不存在")
+    d = client.post("/api/agent/run",
+                    json={"query": "端点枚举 水平越权 目录遍历 XSS 上传",
+                          "max_steps": 20, "top_k": 6,
+                          "hosts": ["wrong-host.local"], "max_blocked_calls": 2}).json()
+    assert d["summary"]["blocked_calls"] > 0
+    assert d["graph"]["findings"] == []
+    assert "越界" in d["summary"]["terminated_reason"]
+    assert d["summary"]["steps"] < 6, "不应把所有候选技能都试完"
+
+
+def test_agent_run_rejects_unknown_field(client: TestClient):
+    assert client.post("/api/agent/run",
+                       json={"query": "x", "nonsense": 1}).status_code == 422
+
+
+def test_agent_contribution_endpoint(client: TestClient):
+    if client.get("/api/agent/lab").status_code == 404:
+        pytest.skip("实验靶场不存在")
+    d = client.get("/api/agent/contribution",
+                   params={"q": "端点枚举 水平越权", "top_k": 5}).json()
+    assert d["contribution"], "应产出贡献度统计"
+    for name, a in d["contribution"].items():
+        assert "hit_rate" in a and "executed" in a
+    assert "terminated_reason" in d
+
+
 # --------------------------------------------------------------------- 失败路径
 
 

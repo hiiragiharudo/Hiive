@@ -1,0 +1,150 @@
+{
+  "_comment": [
+    "实验靶场的技能执行计划。",
+    "放在独立 JSON 而非 SKILL.md frontmatter 的原因：本项目 frontmatter 解析器",
+    "只支持简单 YAML 子集（标量/标量列表/块标量），不支持'列表中嵌字典'的嵌套结构。",
+    "这是已知取舍——若日后接入完整 YAML 库可迁回 frontmatter，技能包即完全自包含。",
+    "靶场为进程内确定性模拟（见 backend/app/agent/target.py），不产生任何真实网络 IO。"
+  ],
+
+  "recon-endpoint-enum": {
+    "actions": [
+      { "method": "GET", "path": "/" },
+      { "method": "GET", "path": "/api/orders/1001" }
+    ],
+    "verify": [
+      {
+        "kind": "http_status",
+        "request": { "method": "GET", "path": "/api/orders/1001" },
+        "assert": { "status": 200 }
+      }
+    ],
+    "finding_kind": "endpoint-disclosure",
+    "severity": "info",
+    "asset": "/api/orders/{id}",
+    "discover_assets": [
+      { "kind": "endpoint", "value": "/" },
+      { "kind": "endpoint", "value": "/api/orders/{id}" },
+      { "kind": "endpoint", "value": "/admin/users" }
+    ]
+  },
+
+  "bola-order-id-swap": {
+    "actions": [
+      { "method": "GET", "path": "/api/orders/1001" },
+      { "method": "GET", "path": "/api/orders/1002" }
+    ],
+    "verify": [
+      {
+        "kind": "http_diff",
+        "a": { "method": "GET", "path": "/api/orders/1001" },
+        "b": { "method": "GET", "path": "/api/orders/1002" },
+        "assert": { "both_status": 200, "body_differs": true }
+      }
+    ],
+    "finding_kind": "bola",
+    "severity": "high",
+    "asset": "/api/orders/{id}"
+  },
+
+  "admin-403-header-bypass": {
+    "actions": [
+      { "method": "GET", "path": "/admin/users" }
+    ],
+    "verify": [
+      {
+        "kind": "http_status",
+        "request": { "method": "GET", "path": "/admin/users" },
+        "assert": { "status": 403 }
+      },
+      {
+        "kind": "http_status",
+        "request": {
+          "method": "GET",
+          "path": "/admin/users",
+          "headers": { "X-Original-URL": "/admin/users" }
+        },
+        "assert": { "status_not_in": [401, 403] }
+      }
+    ],
+    "finding_kind": "broken-access-control",
+    "severity": "critical",
+    "asset": "/admin/users"
+  },
+
+  "reflected-xss-probe": {
+    "actions": [
+      { "method": "GET", "path": "/search", "query": { "q": "hiive_probe_7f3a" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": {
+          "method": "GET",
+          "path": "/search",
+          "query": { "q": "hiive_probe_7f3a" }
+        },
+        "assert": { "contains": ["hiive_probe_7f3a"] }
+      }
+    ],
+    "finding_kind": "reflected-xss",
+    "severity": "medium",
+    "asset": "/search"
+  },
+
+  "path-traversal-static-file": {
+    "actions": [
+      { "method": "GET", "path": "/static", "query": { "file": "normal.txt" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": {
+          "method": "GET",
+          "path": "/static",
+          "query": { "file": "../../etc/passwd" }
+        },
+        "assert": { "contains": ["root:x:0:0"] }
+      }
+    ],
+    "finding_kind": "path-traversal",
+    "severity": "high",
+    "asset": "/static"
+  },
+
+  "unrestricted-file-upload": {
+    "actions": [
+      { "method": "POST", "path": "/upload", "body": { "filename": "shell.phtml" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": {
+          "method": "POST",
+          "path": "/upload",
+          "body": { "filename": "shell.phtml" }
+        },
+        "assert": { "contains": ["shell.phtml"], "not_contains": ["\"uploaded\":false"] }
+      }
+    ],
+    "finding_kind": "unrestricted-upload",
+    "severity": "critical",
+    "asset": "/upload"
+  },
+
+  "sqli-search-false-positive": {
+    "actions": [
+      { "method": "GET", "path": "/search", "query": { "q": "'" } }
+    ],
+    "verify": [
+      {
+        "kind": "body_contains",
+        "request": { "method": "GET", "path": "/search", "query": { "q": "'" } },
+        "assert": { "contains": ["SQL syntax", "mysql_fetch", "You have an error in your SQL"] }
+      }
+    ],
+    "finding_kind": "sql-injection",
+    "severity": "high",
+    "asset": "/search"
+  }
+}

@@ -29,6 +29,7 @@ from .api.routes import (
     route_router,
     skills_router,
 )
+from .api.routes_agent import agent_router
 from .core.config import Settings
 from .core.service import SkillService
 
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(route_router)
     app.include_router(lexicon_router)
     app.include_router(bench_router)
+    app.include_router(agent_router)
     return app
 
 

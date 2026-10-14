@@ -70,6 +70,8 @@ class SkillService:
         self.lexicon: BilingualLexicon | None = None
         self.state = ServiceState()
         self._bench_cache: dict[Path, list[BenchItem]] = {}
+        self._lab_router: SkillRouter | None = None
+        self._lab_plans: dict | None = None
 
     # ---------------------------------------------------------------- 加载
 
@@ -189,3 +191,36 @@ class SkillService:
         items = self.bench_items(path)
         router = self.make_router(**overrides)
         return run_bench(router, items, top_k=overrides.get("top_k")), router
+
+    # ---------------------------------------------------------------- 实验靶场
+
+    def lab_paths(self) -> tuple[Path, Path]:
+        repo = Path(__file__).resolve().parent.parent.parent.parent
+        return repo / "eval" / "lab" / "skills", repo / "eval" / "lab" / "plans.json"
+
+    def lab_router(self) -> SkillRouter:
+        """实验靶场的独立路由器（与生产语料隔离，按需构建并缓存）。"""
+        with self._lock:
+            if self._lab_router is not None:
+                return self._lab_router
+            skills_dir, _ = self.lab_paths()
+            if not skills_dir.exists():
+                raise FileNotFoundError(f"实验靶场技能目录不存在: {skills_dir}")
+            reg = SkillRegistry()
+            reg.load_roots([("lab", skills_dir)])
+            reg.build_index(tokenizer=self.settings.tokenizer, vector_kind="tfidf")
+            self._lab_router = SkillRouter(
+                reg, RouterConfig(top_k=5, recall_n=20, channels=("bm25",),
+                                  expand_query=self.settings.expand_query)
+            )
+            return self._lab_router
+
+    def lab_plans(self) -> dict:
+        from ..agent.engine import load_plans
+
+        if self._lab_plans is None:
+            _, plans_path = self.lab_paths()
+            if not plans_path.exists():
+                raise FileNotFoundError(f"实验靶场执行计划不存在: {plans_path}")
+            self._lab_plans = load_plans(plans_path)
+        return self._lab_plans
