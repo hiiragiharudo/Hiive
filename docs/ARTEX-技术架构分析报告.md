@@ -16,7 +16,9 @@
 2. **单意图生成者 + 执行者分离**：`planner` 是**唯一**的意图生成者且**从不亲自干活**；`worker` 只领一条意图、执行、写回、即停，**从不自作主张扩大方向**。见 `agent/planner.go:298`、`agent/worker.go:230`。
 3. **事件驱动闭环 + 跨唤醒共享 todolist**：图一变（debounced）就唤醒 planner；planner 每轮是**全新会话**（无状态），但通过一份按任务保留的 `TodoStore` 把串行利用链「记一次、分多轮逐步派」，从而在无状态会话下依然能走完 `注入点→取凭据→横向→提权` 这类强依赖链。见 `agent/planner.go:43-49, 106-144, 433`。
 
-**规模**：非 SDK 部分 Go 327 文件 / **85,008 行**（其中测试 153 文件 / 27,538 行）；`norma/`（agent SDK，被 `go.mod` 用 `replace` 拉进源码树）206 文件 / 34,209 行；前端 187 个 ts/tsx / 51,907 行 / 27 个页面。
+**规模**：非 SDK 部分 Go 327 文件 / **85,008 行**（其中测试 153 文件 / 27,538 行）；`norma/`（agent SDK，被 `go.mod` 用 `replace` 拉进源码树）206 文件 / 34,209 行（生产 18,471 + 测试 15,556）；前端 187 个 ts/tsx（TSX 152 + TS 35）/ **56,088 物理行** / 27 个页面；数据库 **49 张表**（`db/schema.sql` 1,386 行）。
+
+**给毕业设计的一句话定位**：这份代码有 119k 行，但**真正的思想密度集中在不到 5k 行里** —— `agent/planner.go` 的规划提示词与去重规则、`agent/worker.go` 的写回纪律、`server/engine.go` 的闭环与状态机、`norma/skill/skill.go`（**整个技能系统的实现只有 331 行**）、`norma/compaction/compaction.go` 的摘要与技能重注入。**读这 5k 行，砍掉其余 114k 行，就是一个优秀毕设的骨架。**
 
 **最重要的一个风险提示**：`go.mod:3-6` 明确写着 —— 上游 `github.com/Autumn-27/norma` 已闭源，本仓库是把 v0.4.3 从 Go module proxy 里 restore 回 `./norma` 再用 `replace` 引用的。**整个 agent 运行时（会话循环、工具调度、权限、压缩、transcript）都在 norma 里**，34k 行。这意味着：ARTEX 自身的 85k 行是「业务层」，而真正的 agent 内核你不能当第三方库依赖，只能读它、抄它或重写它。**这是毕业设计选题时最需要先想清楚的一件事。**
 
@@ -38,6 +40,17 @@
 ```
 
 - 入口：`cmd/artex/main.go`（156 行），`cmd/artex/main.go:110-115` 构造 skill 目录并 `server.New(ctx, mgr, skillDir, dataDir, baseDir)`。
+
+**启动顺序**（`cmd/artex/main.go`，逐段）：
+1. `:54-59` 解析 flag（`-addr :8787` / `-data <BaseDir>/data` / `-proxy 127.0.0.1:8788`，**proxy 传空串即禁用流量录制**）
+2. `:63-65` `server.BuildVersion = version`（release 由 `-ldflags -X` 注入）→ 打印 banner
+3. `:69` `server.StartLogCapture()` —— **先于一切**开始捕获日志（同时仍写 stderr），让日志页能看启动过程
+4. `:75-79` `selfupdate.Bootstrap()` —— **必须在开库/绑端口之前**；返回 `Restart` 时直接 `return ExitRestart(75)`，由守护脚本完成换装
+5. `:93-96` 信号处理（`signal.NotifyContext`）→ **刻意派生一个独立的 `shutdownContext`**，避免父 ctx 的 `context.Canceled` 抢在取消原因附加之前赢下竞态，导致运行中的 Agent 丢掉诊断原因
+6. `:98-102` `server.NewManager(dataDir, proxy)` —— **DB 迁移都在这里**（`pgdb.Open` → `RecoverFindingRetests` → `EnsureLLMRecordsTable` → `EnsureLLMUsageTable` → `intercept.New(pg)` → `traffic.Open+Start` → `enrich.New`），main.go 自己不做迁移
+7. `:107-108` `AfterFunc(30s, selfupdate.Settle)` —— **活过 30 秒才算新版本稳定**，标记才会被清
+8. `:110-127` `server.New(...)` + `http.Server{ReadHeaderTimeout: 10s}`（**只设这一项**，以便 SSE/流式长连接）+ `ListenAndServe`
+9. `:132-144` 退出：信号 → 退出码 0（脚本停止循环）；`RestartRequested` → 退出码 75（脚本重新拉起）+ 5 秒限时 `Shutdown`
 - **前端内嵌**：`server/webui_embed.go:1` 的构建标签 `//go:build embedui` + `//go:embed all:webui/dist`。不带该 tag 编译时 `webui_stub.go`（15 行）让 webui 处理器直接 404，此时要单独跑 `next dev`。
 - **数据库**：PostgreSQL（`github.com/jackc/pgx/v5`，`go.mod:14`）。`db/schema.sql`（1386 行）随二进制 `go:embed`，**每次启动幂等重跑**（大量 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` + `DO $$ ... $$` 条件迁移），即「重启即迁移」，见 `README.md:151`。
 - 另有 **SQLite sidecar** 只服务流量索引（`traffic/traffic.go:37` 引入 `modernc.org/sqlite`，用于 FTS5 全文检索），与主库分离。
@@ -186,8 +199,11 @@ func (e *Engine) Run(ctx, t *Task) {
 **两层终止，语义严格分开**（这是这个项目很值得学的一点）：
 
 **A. 单次 run 的终止** → `harness.TerminalReason`（`norma/harness/event.go:38-48`，11 种）+ **收尾阶段（Settlement）**：
-- `completed` / `max_turns` / `timeout` / `model_error` / `blocking_limit` / `prompt_too_long` / `image_error` / `stop_hook_prevented` / `hook_stopped` / `aborted_streaming` / `aborted_tools`。
-- 撞到 `max_turns` 或 `timeout` 时，SDK **不是直接杀**，而是进入**收尾阶段**：注入一段收尾提示词（默认 10 轮预算），让 agent 先「把已识别但没写回的内容落库」再输出一句总结。收尾提示词按 agent 可后台编辑（`agents.wrapup_prompt`），但**禁用哪些工具是代码固定策略**，用户改不掉（worker 收尾禁 Bash，`agent/wrapup.go:90-100`、`worker.go:425`）。
+- 11 种取值：`completed` / `max_turns` / `timeout` / `model_error` / `prompt_too_long` / `stop_hook_prevented` / `aborted_streaming` / `aborted_tools` / `blocking_limit` / `image_error` / `hook_stopped`。
+- ⚠️ **其中 3 种「定义了但主循环从不产出」**：`blocking_limit`（`event.go:39`）、`image_error`（`:40`）、`hook_stopped`（`:46`）。**你若照抄后按它们分支，就是死代码**。
+- `aborted_streaming` 与 `aborted_tools` 的区别：前者是模型流式阶段被取消；后者是工具执行阶段被取消。而 `timeout` 是**宿主设定的墙钟预算**（`MaxDuration`）命中 —— 既包括轮边界检查，也包括 `toolCtx` deadline **打断在飞的工具**（`harness/query.go:221-228` 用独立的 `toolCtx` 派生 deadline：**打断工具但绝不切断模型流**）。
+- 撞到 `max_turns` 或 `timeout` 时，SDK **不是直接杀**，而是进入**收尾阶段**：把收尾提示词作为一条 **user 轮**注入（隐藏 `DisabledTools` 的 schema，典型隐藏 `Bash`），让 agent 先「把已识别但没写回的内容落库」再输出一句总结。收尾提示词按 agent 可后台编辑（`agents.wrapup_prompt`），但**禁用哪些工具是代码固定策略**，用户改不掉（worker 收尾禁 Bash，`agent/wrapup.go:90-100`、`worker.go:425`）。
+- **收尾结束仍以原预算原因收尾**（`max_turns`/`timeout`），**永远不会变成 `completed`**（注释理由见 `norma/harness/query.go:99-104`）—— 这是「预算耗尽 ≠ 正常完成」在 SDK 层的贯彻。
 - 项目还做了**任务级超时收尾词**与 per-run 收尾词的分离：planner 的两套词语义**相反**（per-run 说「别停继续规划」，任务超时说「到点停止规划、做最后判定」），用 `PromptByReason` 在收尾时按实际 reason 现场挑（`agent/wrapup.go:102-173`）。
 
 **B. 意图（intent）状态机**（`db/schema.sql:187`）：`open → running → {done, blocked, exhausted, stopped, paused, deleted}`。分流规则在 `engine.go:1133-1152`：
@@ -276,13 +292,17 @@ func (e *Engine) Run(ctx, t *Task) {
 | **③ 拦截规则（intercept_rules）** | DB 表：`match_target ∈ {tool_name, tool_input}`、`match_type ∈ {string, regex}`（regex 预编译失败**跳过该条而不崩**）、`action ∈ {allow, deny, ask}`、按 `priority DESC` **取第一条命中**（所以 allow 也能短路掉低优先级规则）、超时策略。可全局、可按任务，也可由任务模板预置。**只有进入「拦截启用工具集」的工具才走规则**（默认集：`Bash/WebFetch/web_search/shell_open/shell_send/Write/Edit/MultiEdit`） | `db/schema.sql:1033-1076`、`intercept/intercept.go:143-147, 165-208, 508-548` |
 | **④ LLM 兜底裁判（judge）** | **仅当规则一条都没命中时**：一个独立 LLM 调用，把「`tool_name` + 完整 `arguments` +（仅当存在当前人类原文时）`background`」交给裁判模型，输出 `allow/ask/deny` + 三段式 comment（实际操作/成功后后果/命中规则编号）。默认 `timeout=15s`、`fail_action=allow`、`ask_timeout=300s`、`ask_timeout_action=deny`；`MaxTokens=1024`、`Temperature=0`、`Thinking=disabled` | `intercept/intercept.go:303-490`、`intercept/prompt.go:50-205`、`server/intercept.go:36-94` |
 
-**「ask」（转人工审批）的完整链路**：`guard.preToolUse` → `interceptor.HandleAsk` → 写 `intercept_pending(status=pending)` → **阻塞等待** `pendingManager` 的 channel（有人在页面上点了允许/拒绝，或超时）→ 超时按 `timeout_action`（默认 deny，ask 超时默认 300s）→ 返回 block 或放行。审批记录支持展开看详情（`README.md:51-54`）。
+**「ask」（转人工审批）的完整链路**：`guard.preToolUse` → `interceptor.HandleAsk` → 写 `intercept_pending(status=pending)` → **阻塞等待** `pendingManager` 的 channel（容量 1，**只用于唤醒**）→ 有人在页面点允许/拒绝时 `Interceptor.Decide` **先改库、成功才唤醒**（库是唯一真相源；`resolved==false` 返回 `ErrAlreadyDecided` → HTTP 409）→ 超时按 `timeout_action`（默认 deny；`ask` 超时默认 300s）→ 返回 block 或放行。两个很细的竞态防护：① `HandleAsk` **注册 channel 之后会回读一次 DB**，防止「INSERT 已提交但 channel 还没注册」期间用户已决策而丢单；② 超时后发现已被人决策则**回读 DB 取真实结果**（`intercept/intercept.go:584-689`）。审批记录支持展开看详情（`README.md:51-54`）。
 
 **几个很值得学的工程细节**：
 - **拦截消息必须「去 WAF 化」**：`systemBlockMessage`（`guard/guard.go:126-141`）会把拦截原因包装成「**【ARTEX 平台管控·非目标防御】此调用被平台拦截。原因：… 此操作被禁止。**」。理由写在注释里且非常真实：裸的「禁止执行此工具」和目标的 403/WAF 长得一模一样，pentest agent 的本能是**绕过它**（改写命令、换 payload、重编码、重试）—— 既徒劳（平台拦的是**这一类动作**）又错误（这是策略决定，不是待攻克的障碍）。**只有面向模型的 tool_result 带这个前缀，审计/历史行保留原始原因**。
 - **裁判输入的信任边界契约**（`intercept/prompt.go:10-18`）：明确声明输入里的提示注入文字**都是待审查数据**；不附带历史工具调用/结果/历史审批理由（只审当前调用，不推测此前执行情况）；不许因为路径像 `/srv` 就断言是生产资产。用户可自定义裁判策略，但 `JudgeContextBoundary` 与 `JudgeOutputContract` 由程序强制追加，**改不掉**。
+- **裁判输出是严格解析的**（`intercept/prompt.go:162-205`）：用 `json.Decoder` 逐 token 校验（拒绝重复键、多余键、尾随字符）；会确定性地剥掉 ```` ```json ```` 围栏，但**故意不补全被 MaxTokens 截断的 JSON**（注释理由：补全等于「凭空发明模型没给的裁决」）；`comment` 必须在 2400 字符内且以「实际操作：」开头。失败策略：模型报错或输出不可解析 → 走 `fail_action`（**默认放行**）；但**「上下文无效」（参数不是合法 JSON）→ 无条件 `ask` 转人工**，不受 `fail_action` 影响。
+- **MCP 工具默认要人工批准**：`mcphttp` 给每个远端工具装 `Permissions: AskUser("call MCP tool <full>?")`（`mcphttp/client.go:292-294`）—— MCP 工具与 worker 的绕过模式不同，走询问。
 - **资产拦截规则**（独立于工具拦截）：`asset_intercept_rules`（全局）+ `task_intercept_rules`（任务级，含 `allow` 白名单语义）——匹配的是**目标资产**（域名/IP/URL 全等或模糊、CIDR），判定顺序是「先看拦截规则（全局 ∪ 任务 block），命中即禁；未命中且该任务存在启用的 allow 规则时，必须命中某条 allow 才放行」(`db/schema.sql:1259-1266`)。
-- **失败归因（Observer / G5）**：把 Bash 结果分类成 blocked/error/ok 做统计，让 planner 能在遇到 WAF 时换策略而不是原地重试（`guard/guard.go:145-163`）。
+- **失败归因（Observer / G5）**：把 Bash 结果分类成 blocked/error/ok 做统计（正则 `(?i)\b(403|forbidden|waf|blocked|rate.?limit|429|captcha|denied)\b`），让 planner 能在遇到 WAF 时换策略而不是原地重试（`guard/guard.go:143-163`）。
+- **审计的 ID 关联是保守的**：`intercept.Trace` 只在「恰好一个候选」时才把 tool_use 与 tool_result 认领关联，否则标 `Correlation="ambiguous"`（注释：*Never guess between simultaneous identical requests, even when results arrive FIFO*）；`Finish()` 时未收到结果的调用一律标 `"unknown"`，**绝不标成功**（`intercept/trace.go:36-38, 89-115, 143-180`）。
+- **工具输出有一道全局收口**：`harness/tools.go:126-133 capOutput` 对**所有**工具（内置/MCP/自定义/宿主）的文本块跑 `tool.CaptureOnce`，它用 `<persisted-output>` / `characters truncated]` 标记做幂等（`norma/tool/helpers.go:60-75`），保证任何工具都无法撑爆上下文。**这是毕业设计最该抄的一处**。
 - 注意 `guard.go:3-7` 明确写了 **RoE 授权范围机制已被移除**，破坏性/外泄管控**不再硬编码**在 guard 里，而是变成 DB 里的【内置】拦截规则 —— 用户可以禁用或删除它们。**对毕业设计来说这是一个必须自己补回来的缺口**（见 §11）。
 
 ---
@@ -676,8 +696,11 @@ erDiagram
 
 ### 8.1 技术栈
 
-Next.js **16**（App Router）+ React **19** + TypeScript 5.9 + Tailwind **4** + shadcn/radix + zustand（状态）+ zod（校验）+ Biome（lint/format）。
-可视化：**@xyflow/react 12**（探索链路图）、**@antv/g6 5 + @antv/graphin**（资产覆盖图，d3-force 布局）、**recharts 3**（图表）、react-markdown + remark-gfm（报告/证据渲染）、@tanstack/react-table（表格）。
+Next.js **16.2.9**（App Router，启用 `reactCompiler: true`）+ React **19.2.7** + TypeScript 5.9（strict）+ Tailwind **4.1.5**（**无 tailwind.config，CSS-first**）+ shadcn（`components.json` 的 style 是 `radix-nova`，即新版 shadcn 的 radix 单体包而非 `@radix-ui/react-*` 分包）+ zustand（状态）+ Biome 2.5（替代 ESLint/Prettier）+ husky/lint-staged。**源码根是 `web/src`**（`@/*` → `./src/*`）。
+
+可视化：**@xyflow/react 12**（探索链路图）、**@antv/g6 5**（资产覆盖图）、**recharts 3**（仪表盘图表）、react-markdown + remark-gfm（报告/证据渲染）。
+
+> ⚠️ `package.json` 声明了 **11 个全仓零引用**的依赖：`@tanstack/react-table`、`@antv/graphin`、`d3-geo`、`topojson-client`、`@fullcalendar/react`、`react-hook-form`、`@hookform/resolvers`、`zod`、`temporal-polyfill`、`@dnd-kit/sortable`、`@dnd-kit/modifiers`（表格是手写的、覆盖图只用 g6、没有表单库）。**评估它的依赖面时别把这些算进去**，自己立项时也别照抄这份依赖清单。
 
 ### 8.2 路由清单（27 个 `page.tsx`）
 
@@ -687,48 +710,53 @@ Next.js **16**（App Router）+ React **19** + TypeScript 5.9 + Tailwind **4** +
 | --- | --- | --- |
 | `/login` | `(auth)/login/page.tsx` | 登录 |
 | `/setup` | `(auth)/setup/page.tsx` | 首次设置管理员密码 |
-| `/` | `(external)/page.tsx` | 外部门面/落地页 |
-| `/chat` | `(main)/chat/page.tsx` | **人在环路对话**（与 main agent 对话、会话管理） |
-| `/dashboard` | `(main)/dashboard/page.tsx` | **仪表盘**（总览指标 / Token 消耗 / 活动流） |
-| `/function/tasks` | `(main)/function/tasks/page.tsx` | **任务列表**（分类、平铺/按任务/按资产视图、归档） |
-| `/function/tasks/detail` | `.../tasks/detail/page.tsx` | **任务详情**（10 个 tab，见 8.3） |
-| `/function/assets` | `(main)/function/assets/page.tsx` | **资产**（全局资产库、公司归属、ScopeSentry 同步入口） |
-| `/function/findings` | `(main)/function/findings/page.tsx` | **发现**（漏洞列表、分组、筛选、导出） |
-| `/function/findings/detail` | `.../findings/detail/page.tsx` | 漏洞详情（证据、复测历史、流量绑定、报告） |
-| `/function/traffic` | `(main)/function/traffic/page.tsx` | **流量录制**（按 host 浏览交换、正文查看、blob 分段取） |
+| `/` | `(external)/page.tsx` | 根路径，**一行 `redirect("/function/tasks")`**（不是落地页） |
+| `/chat` | `(main)/chat/page.tsx` | **人在环路对话**（与 main agent 对话、会话管理；`?c=<conversationId>` 定位会话，1569 行） |
+| `/dashboard` | `(main)/dashboard/page.tsx` | **仪表盘**（页面标题「总览」：指标卡 / Token 消耗 recharts Bar 图 / 活动流 / 待审批入口） |
+| `/function/tasks` | `(main)/function/tasks/page.tsx` | **任务列表**（`当前任务`/`已归档` 两个 Tab、分类、批量暂停/归档、新建任务抽屉；**3417 行，最大的页面**） |
+| `/function/tasks/detail?id=<taskId>` | `.../tasks/detail/page.tsx` | **任务详情**（10 个 tab，见 8.3；462 行的壳） |
+| `/function/assets` | `(main)/function/assets/page.tsx` | **资产**（全局资产库、企业归属、DSL 搜索） |
+| `/function/findings` | `(main)/function/findings/page.tsx` | **发现**（列表/按资产树、统计卡、分组、筛选、导出 md/zip/csv/json） |
+| `/function/findings/detail?id=<id>&context_task=<taskId>` | `.../findings/detail/page.tsx` | 漏洞详情（摘要/证据 PoC/详细报告/状态/关联流量/**漏洞链路图**/复测） |
+| `/function/traffic` | `(main)/function/traffic/page.tsx` | **流量录制**（按 host 浏览交换、正文查看、blob 分段取、FTS 全文搜） |
 | `/function/llm-records` | `(main)/function/llm-records/page.tsx` | LLM 调用录制（请求/响应/原始报文/token） |
-| `/function/commands` | `(main)/function/commands/page.tsx` | 工具调用记录与按工具聚合统计 |
-| `/function/workspace` | `(main)/function/workspace/page.tsx` | 工作空间（任务工作目录文件浏览） |
+| `/function/commands` | `(main)/function/commands/page.tsx` | 工具执行记录与按工具聚合统计 |
+| `/function/workspace` | `(main)/function/workspace/page.tsx` | 工作空间（任务工作目录文件浏览/上传/下载） |
 | `/function/sync` | `(main)/function/sync/page.tsx` | **资产同步**（ScopeSentry 数据源、按项目/任务导入） |
-| `/system/agents` | `(main)/system/agents/page.tsx` | **Agent 管理**（列表、触发器） |
-| `/system/agents/detail` | `.../system/agents/detail/page.tsx` | Agent 配置（提示词版本、工具绑定、技能/MCP 可见性、预算、收尾词） |
-| `/system/llm` | `(main)/system/llm/page.tsx` | **LLM 配置**（多 profile、协议/思考参数/重试/轮询/熔断、连接测试） |
-| `/system/skills` | `(main)/system/skills/page.tsx` | **技能管理**（列表+调用统计、文件树编辑、ZIP 上传、未命中清单） |
-| `/system/tools` | `(main)/system/tools/page.tsx` | 工具目录（描述/schema/绑定 agent、自定义工具） |
+| `/system/agents` | `(main)/system/agents/page.tsx` | **Agent 管理**（Agent 清单、触发器） |
+| `/system/agents/detail?key=<agentKey>` | `.../system/agents/detail/page.tsx` | Agent 配置（提示词版本、工具绑定、技能/MCP 可见性、预算、收尾词） |
+| `/system/llm` | `(main)/system/llm/page.tsx` | **LLM 配置**（多 profile、协议/思考参数/重试/轮询/熔断、模型拉取、连接测试） |
+| `/system/skills` | `(main)/system/skills/page.tsx` | **技能管理**（列表+调用统计、文件树编辑器、ZIP 上传、未命中清单） |
+| `/system/tools` | `(main)/system/tools/page.tsx` | 工具目录（系统工具 + 自定义工具、描述/schema/绑定 agent） |
 | `/system/mcp` | `(main)/system/mcp/page.tsx` | MCP server 管理（stdio/http/sse、工具发现） |
-| `/system/intercept` | `(main)/system/intercept/page.tsx` | **拦截审批**（规则管理） |
+| `/system/intercept` | `(main)/system/intercept/page.tsx` | **命令拦截**（工具拦截规则 + LLM 兜底审批配置 + 用量） |
 | `/system/intercept/approvals` | `.../intercept/approvals/page.tsx` | **全局审批记录**（可展开详情） |
-| `/system/intercept/assets` | `.../intercept/assets/page.tsx` | 资产级拦截规则 |
-| `/system/notify` | `(main)/system/notify/page.tsx` | 漏洞 IM 推送渠道与投递历史 |
-| `/system/logs` | `(main)/system/logs/page.tsx` | **后端日志**（SSE 实时） |
+| `/system/intercept/assets` | `.../intercept/assets/page.tsx` | **资产拦截**（全局黑名单） |
+| `/system/notify` | `(main)/system/notify/page.tsx` | 通知推送（IM 渠道 + 投递记录） |
+| `/system/logs` | `(main)/system/logs/page.tsx` | **后端日志**（SSE 实时尾随 + 反向分页翻历史） |
 | `/system/settings` | `(main)/system/settings/page.tsx` | **系统配置**（并发数、代理、功能开关、版本与一键更新、回滚） |
 
-### 8.3 任务详情的 10 个 Tab（`(main)/function/tasks/detail/page.tsx`）
+> ⚠️ **两个静态导出的关键约束（照抄时必看）**：
+> 1. **详情页全部用查询参数，不用 `[id]` 动态段**（`detail?id=`、`detail?key=`、`chat?c=`）—— 因为 `output: "export"` 下动态路由需要 `generateStaticParams`；改用 query 参数后，每个 `useSearchParams` 页面必须包 `React.Suspense`。
+> 2. **没有 `route.ts`**：前端不含任何 Next API Route，所有数据来自 Go 后端的 `/api/*`。
 
-`会话`(2102 行的 `sessions-tab`，含执行过程、工具调用、人在环路介入、SSE 实时流) · `总览`(1241 行，含目标管理/约束管理/心跳/Token) · **`探索链路`**(graph-tab → `components/exploration-graph.tsx`) · **`播报板`**(broadcast-tab, 672) · `发现` · `复测` · `测试资产`(663) · **`资产覆盖图`**(coverage-graph-tab, 652) · `拦截审批` · `报告`。
+### 8.3 任务详情的 10 个 Tab（`(main)/function/tasks/detail/page.tsx:53-64`）
+
+`会话`(sessions-tab，**2205 行，全站唯一的任务级 SSE 尾随**：多会话分段、工具调用、人在环路介入、审批聚焦、worker 控制) · `总览`(overview-tab，1322 行，目标管理/约束管理/心跳/Token) · **`探索链路`**(graph-tab → `components/exploration-graph.tsx`，20s 轮询 + 结构签名去抖) · `播报板`(broadcast-tab) · `发现`(findings-tab) · `复测`(retests-tab) · `测试资产`(assets-tab) · **`资产覆盖图`**(coverage-graph-tab，721 行) · `拦截审批`(intercept-tab，**带未决审批数角标**) · `报告`(report-tab)。
 
 ### 8.4 两个图是怎么做的
 
 | 图 | 组件 | 库 | 布局 | 数据端点 |
 | --- | --- | --- | --- | --- |
-| **探索链路图** | `web/src/components/exploration-graph.tsx`（626 行） | **@xyflow/react（React Flow）** | 自研 `computeLayout()`（分层），并对 `derived_from` 的回边做去重避免重叠绘制（`exploration-graph.tsx:172`） | `GET /api/exploration/graph` |
-| **资产覆盖图** | `(main)/function/tasks/detail/_tabs/coverage-graph-tab.tsx`（652 行） | **@antv/g6 v5** | `type: "d3-force"`，behaviors `drag-element-force / drag-canvas / zoom-canvas`；同类子节点默认折叠（`FOLD_LIMIT=20`，每次再展开 20）；**已在 G6 的渲染 bug 上做了防护**（render() 异步跑 d3-force 布局，组件在布局落地前被卸载会让 g6 在已清空的 context 上访问 transform 而抛错，见 `coverage-graph-tab.tsx:526,530`） | `GET /api/tasks/{id}/coverage-graph`（`server/server.go:703`）+ 节点抽屉 `?asset_id=` 反查关联意图/事实（`server.go:1790`） |
+| **探索链路图** | `web/src/components/exploration-graph.tsx`（663 行；被任务 Tab 与漏洞链路复用） | **@xyflow/react（React Flow）**，样式 `@xyflow/react/dist/style.css` | **自研分层布局**（**不是** d3-force/dagre）：① 前向 DFS 把回边挑出保证 DAG ② Kahn 队列算最长路径层级 ③ 双向 barycenter 扫描 **×4 轮**降交叉 ④ `x = 列×360`、列内居中、`ROW_H=140`。节点位置**跨 props 更新保留**（轮询时拖动不被打断）；对 `derived_from` 的回边去重避免重叠绘制。节点 8 型：begin/goal/hint/intent/fact/finding/digest | `GET /api/exploration/graph?task=<id>`；漏洞详情另有 `GET /api/exploration/findings/{id}/lineage` |
+| **资产覆盖图** | `(main)/function/tasks/detail/_tabs/coverage-graph-tab.tsx`（721 行） | **@antv/g6 v5**（**动态 `await import("@antv/g6")`** 以避开 SSR/静态导出期的 window 依赖） | G6 内置 **`type: "d3-force"`**：`link.distance` 公司/根域 120、其余 60；`manyBody.strength` endpoint/fold 为 −60、其余 −200；`collide.radius = size+8`；behaviors `drag-element-force / drag-canvas / zoom-canvas`。自顶向下**级联折叠**（`FOLD_LIMIT=20`，每次「展示更多」+20）；节点尺寸按 kind（company 46 → endpoint 20）；图标是**手写内联 lucide SVG data-URI**（规避 react-dom/server 打包问题）；**已对 G6 的渲染时序 bug 做了防护**（render() 异步跑布局，组件在布局落地前被卸载会让 g6 在已清空的 context 上访问 transform 而抛错） | `GET /api/tasks/{id}/coverage-graph`（`server/server.go:703`）+ 节点抽屉 `GET /api/tasks/{id}/asset-refs?asset_id=` 反查关联意图/事实（`server.go:1790`） |
 
 ### 8.5 交互封装
 
-- 所有 REST 走 `web/src/lib/api.ts`（1316 行）的 `http()`：自动带 JWT、`401` 清 token 并跳 `/login`、错误消息优先取响应里的 `error` 字段、Go 的 `null` 切片统一 `?? []` 归一。按域导出的 `api.xxx()` 方法集中在这一个文件里（如 `api.taskCoverageGraph(id)`）。
-- SSE 走 `sseUrl()`（同源 / dev 直连 :8787 / `NEXT_PUBLIC_SSE_BASE` 覆盖，token 作为 `?token=` 附带，因为跨源 SSE 带不了 cookie）。
-- Mock：`NEXT_PUBLIC_MOCK=1` 时 `http()` 直接短路进 `web/src/lib/mock/handler.ts` + `data.ts`（一个很大的手工数据集），使在线 demo 可以**纯前端跑通全部页面**（含覆盖图、报告）。
+- 所有 REST 走 `web/src/lib/api.ts`（1316 行）的 `http()`：自动带 JWT、`401` 清 token 并跳 `/login`、错误消息优先取响应里的 `error` 字段、Go 的 `null` 切片统一 `?? []` 归一。按域导出的 `api.xxx()` 方法集中在这一个文件里（如 `api.taskCoverageGraph(id)`）；领域类型集中在 `web/src/lib/types.ts`（1612 行）。
+- **SSE 全站只有 4 处**（原生 `EventSource`，**零 WebSocket**）：任务活动流（`sessions-tab.tsx:972`）、后端日志（`logs/page.tsx:67`）、更新进度（`update-card.tsx:103`）、旁路提问（`use-side-questions.ts:131`，用具名事件 `snapshot`/`cleared`）。**其余实时性靠 28 处 `setInterval` 轮询**（任务详情 5s、仪表盘 5s/15s、发现 5s、探索图 20s、审批角标 5s、旁路 2s…）。**别为了一个页面引入 WebSocket —— SSE + 轮询在这套架构里够用且更简单。**
+- **鉴权是双层守卫**：服务端 `web/src/proxy.ts`（Next 16 的 middleware 改名版，30 行，基于 cookie 重定向）+ 客户端 `(main)/layout.tsx`（静态导出下 middleware 不可用，必须有此层）。JWT 写 localStorage 时**同步写 cookie**（7 天、SameSite=Lax）供服务端读。
+- Mock：`NEXT_PUBLIC_MOCK=1` 时 `http()` 直接短路进 `web/src/lib/mock/handler.ts`（2493 行，**89 条精确 `path ===` 分支**）+ `data.ts`（4223 行手工数据集），使在线 demo 可以**纯前端跑通全部页面**（含覆盖图、报告）。
 
 ---
 
@@ -825,8 +853,25 @@ Next.js **16**（App Router）+ React **19** + TypeScript 5.9 + Tailwind **4** +
 | `cmd/` | 2 | 156 | 入口 |
 | **合计** | **535** | **119,217** | 其中 norma 34,209 |
 
-**自有代码（不含 norma）**：327 文件 / **85,008 行**；其中**测试 153 文件 / 27,538 行**（测试占 **32%** —— 这个比例本身值得学）。
-**norma**：206 文件 / 34,209 行；测试 98 文件 / 15,396 行（45%）。
+**自有代码（不含 norma）**：327 文件 / **85,008 行**（非空行口径）；其中**测试 153 文件 / 27,538 行**（测试占 **32%** —— 这个比例本身值得学）。
+**norma**：206 文件 / 34,209 行；其中**生产 92 文件 / 18,471 行，测试 85 文件 / 15,556 行（测试占 45%）**。
+
+**几个支撑包的「生产 / 测试」拆分**（能看出工程量到底花在哪）：
+
+| 包 | 生产文件 | 生产行 | 测试文件 | 测试行 | 测试占比 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `traffic` | 3 | 2,330 | 7 | 1,551 | 40% |
+| `intercept` | 4 | 1,019 | 3 | 371 | 27% |
+| `notify` | 12 | 1,418 | **14** | **2,611** | **65%** |
+| `selfupdate` | 4 | 764 | 1 | 397 | 34% |
+| `sidequestion` | 4 | 704 | 2 | 556 | 44% |
+| `mcphttp` | 1 | 543 | 1 | 103 | 16% |
+| `evidence` | 1 | 399 | 2 | 357 | 47% |
+| `enrich` | 1 | 264 | 0 | 0 | 0% |
+| `report` | 2 | 260 | 0 | 0 | 0% |
+| `cmd` / `config` | 2 | 352 | 2 | 52 | 13% |
+
+> **读懂这张表**：`notify`（65%）与 `sidequestion`/`evidence`（44%/47%）这类「输入组合多、边界条件多」的包测试投入最高；`enrich`（0%）与 `report`（0%）是纯函数/薄封装，没测。**这正是一个人在有限时间里该有的测试分配策略** —— 把测试压在「组合爆炸 + 出错代价高」的地方。
 
 **`norma/` 子包分布**（说明「agent 内核」到底有多大）：
 
@@ -839,7 +884,7 @@ Next.js **16**（App Router）+ React **19** + TypeScript 5.9 + Tailwind **4** +
 | `harness` | 17 | 2,615 | **真正的 run 引擎**（`query.go` 882 行的主循环、settlement、超时、scheduling） |
 | `compaction` | 11 | 2,078 | 会话压缩 + 技能重注入 |
 | `agentcore` | 8 | 1,288 | `Options`/`Session` 门面（`agentcore.go:508`） |
-| `skill` | 3 | 472 | **技能系统**（本文档 §5 的全部实现，仅 472 行） |
+| `skill` | 3 | 472 | **技能系统**（本文档 §5 的全部实现：生产仅 `skill.go` 331 行 + 测试 141 行） |
 | `memory` | 4 | 432 | 长期记忆（markdown + frontmatter） |
 | `transcript` | 3 | 408 | 对话持久化与 resume / session id |
 | `mcp` | 3 | 380 | stdio MCP 客户端 |
@@ -847,20 +892,23 @@ Next.js **16**（App Router）+ React **19** + TypeScript 5.9 + Tailwind **4** +
 
 ### 10.2 前端规模
 
-| 目录 | 文件数 | 行数 |
-| --- | ---: | ---: |
-| `web/src/app` | 63 | 26,944 |
-| `web/src/components` | 88 | 14,167 |
-| `web/src/lib` | 24 | 10,038 |
-| `web/src/scripts` | 2 | 197 |
-| `web/src/hooks` | 4 | 275 |
-| `web/src/stores` | 2 | 144 |
-| `web/src/navigation` | 1 | 90 |
-| `web/src/config` | 1 | 11 |
-| **合计** | **187** | **51,907** |
+> 口径说明：左列是 `Measure-Object -Line` 的**非空行**统计；括号内按 **物理行（含空行）** 统计。物理行总数 **56,088**（TSX 152 文件 + TS 35 文件 = 187）。
 
-- **页面数：27 个 `page.tsx`**（去掉路由组后的 URL 见 §8.2），另有 10 个任务详情 tab 组件。
-- 最大单文件：`sessions-tab.tsx` 2102 行、`lib/api.ts` 1316 行、`overview-tab.tsx` 1241 行、`lib/mock/data.ts`（mock 数据集，数千行）。
+| 目录 | 文件数 | 非空行 | 物理行 |
+| --- | ---: | ---: | ---: |
+| `web/src/app` | 63 | 26,944 | — |
+| `web/src/components` | 88 | 14,167 | 15,251 |
+| `web/src/lib` | 24 | 10,038 | — |
+| `web/src/scripts` | 2 | 197 | — |
+| `web/src/hooks` | 4 | 275 | — |
+| `web/src/stores` | 2 | 144 | — |
+| `web/src/navigation` | 1 | 90 | — |
+| `web/src/config` | 1 | 11 | — |
+| **合计** | **187** | **51,907** | **56,088** |
+
+- **页面数：27 个 `page.tsx`**（**19,249 行**；去掉路由组后的 URL 见 §8.2），另有 10 个任务详情 tab 组件（6,232 行）与 **61 个 `components/ui/*.tsx`（7,300 行）**。
+- 最大单文件 Top 8：`lib/mock/data.ts` 4223 · `function/tasks/page.tsx` 3417 · `lib/mock/handler.ts` 2493 · `_tabs/sessions-tab.tsx` 2205 · `lib/types.ts` 1612 · `chat/page.tsx` 1569 · `_tabs/overview-tab.tsx` 1322 · `lib/api.ts` 1316。
+- **注意这份规模的构成**：mock 数据 + mock 路由占了 **6,716 行（12%）**，纯粹是为了在线 demo；你自己立项时不需要它。
 
 ### 10.3 其它资产
 
@@ -977,6 +1025,11 @@ for {
 8. **`forge` 式去脏数据**：`try_inet()` 让一条脏 IP 不会把整条企业归属重算语句打挂（`schema.sql:11-21`）。**这个思路在任何 LLM 写库的场景都适用** —— LLM 写进来的数据必须容错。
 9. **拦截消息必须「去 WAF 化」**（`guard/guard.go:126-141`）：明确告诉模型「这是平台策略，不是目标防御，不要尝试绕过」。这是 prompt 层面非常真实的一课。
 10. **SSE 的「先订阅后回放 + `id:` 行 + Last-Event-ID 优先」**（`server.go:2996-3048`）：内存广播可以有损，DB 是 source of truth，客户端重连自动补齐。**不要用 WebSocket 来复刻这个**。
+11. **工具输出的全局收口 `capOutput` + `CaptureOnce` 幂等标记**（`norma/harness/tools.go:126-133`、`norma/tool/helpers.go:60-75`）：超大输出溢写磁盘、只在上下文里留 head + 指针；**幂等**意味着任何工具（含 MCP/自定义）都不能绕过它。这是「长任务不被一次 `nmap -A` 撑爆」的保命设计。
+12. **裁决/审计类的模型输出要「严格解析 + 不许补全」**（`intercept/prompt.go:162-205`）：逐 token 校验 JSON、确定性剥离代码围栏、但**故意不补全被截断的 JSON**（补全＝凭空发明模型没给的裁决）。任何让 LLM 输出结构化判定再驱动程序行为的地方都该照这个做。
+13. **失败/降级方向要和「安全方向」一致**（`notify.ParseFilter` 永不返回 error —— 畸形过滤条件退化为「不过滤」，理由「多推一条远好过静默漏掉一条高危」；而 `min_severity` 的错字**只在写入路径**拦住）。**先想清楚每一处出错的代价方向，再决定降级成什么**。
+14. **只读接口与写锁的粒度分离**（`evidence/store.go:230-244`）：持锁时只做元数据，把 O(body) 的流式读取放到锁外（靠内容寻址 + 宽限期 + 已打开 fd 抗 unlink 保证安全），避免慢客户端阻塞整个进程。
+15. **删除操作的「两阶段 + 崩溃恢复」**（`traffic/traffic.go:1256-1366`）：同文件系统 `rename` 到 staging + 写 `journal.json`，启动时 `RecoverHostDeleteStages` 按「对端事务是否已提交」决定补做还是回滚。**跨存储（PG + 文件/SQLite）的删除永远需要这个模式**。
 
 ### 11.4 论文可以写的创新点（从 ARTEX 的机制里提炼）
 
@@ -993,12 +1046,15 @@ for {
 | 坑 | ARTEX 的现状 | 你的做法 |
 | --- | --- | --- |
 | **自研 SDK 的吞噬** | `norma` 34k 行，占整个项目代码量的 29%；且已闭源 | 写一个扁平的精简 loop |
-| **设计文档丢失** | 注释里大量 `docs §X.Y` 全是悬空引用 | 你自己写 `design.md`，与代码同仓 |
+| **设计文档丢失** | 注释里大量 `docs §X.Y` 全是悬空引用（`docs/` 只剩 1 个文件） | 你自己写 `design.md`，与代码同仓 |
+| **代码注释本身也会漂移** | ① `traffic/traffic.go:1-4` 包注释说「写成人可读文件树 + 侧车 SQLite 索引」，实现其实是**全量写 SQLite + blob 溢出**（同文件 `:434-435` 的注释自己就否定了包注释）；② `norma/README.md:19` 说有 "Snip / Context Collapse"，`compaction/compaction.go:14-16` 明确说**有意省略** | **别把注释当规格**；关键机制要读实现并在自己的文档里标注「已核验」 |
+| **定义了但从不产出的状态值** | `TerminalReason` 的 `blocking_limit` / `image_error` / `hook_stopped` 在主循环里从未产出（`norma/harness/event.go:39,40,46`） | 状态/枚举先只定义你真会产出的；每加一个值就接上产出点与测试 |
 | **索引过度设计** | 资产表单表 22 列 + 8 个部分唯一索引 + GIN/GIST；`activity` 表 12 个索引 | 先建表与必要唯一约束，索引等有真实数据再加 |
-| **前端体积失控** | 52k 行 / 27 页 / 单文件 2102 行 | 6–8 页；把 `api.ts` 拆小；**mock 数据与大页面分开** |
+| **前端体积失控** | 52k 非空行 / 27 页 / 单文件 3417 行；其中 **mock 数据+mock 路由占 6,716 行（12%）** | 6–8 页；把 `api.ts` 拆小；**mock 数据与大页面分开，且别进主包** |
 | **提示词过长** | planner 单段 ~4,000 字中文，靠几十轮实调 | 抄结构不抄字数；把「硬底线 / 去重规则 / 分步派链」写成 5–8 条 bullet |
 | **压缩机制两套并存** | 内置 compaction + 实验 noa（可开关）+ 冷节点 digest = 三套 | 一套滑动窗口摘要，够了 |
 | **RoE 授权范围被移除** | `guard.go:3-7` 明确移除，拦截规则用户可删 | **自己补回不可绕过的授权白名单**（答辩必问） |
+| **审批的默认失败方向是「放行」** | LLM 裁判 `fail_action` 默认 `allow`（`intercept/intercept.go:316`），只有「参数不是合法 JSON」才无条件转人工 | 至少把**破坏性操作类**的 `fail_action` 设成 `ask`/`deny`；这个默认值要想清楚再定 |
 | **「沙箱」名不副实** | 无 OS 级沙箱，Bash 直连宿主 shell，全靠策略闸 | 若要声明沙箱，就用 **Docker 容器 + 只读挂载 + 网络限制**做出真的隔离，否则论文里别写「沙箱」二字 |
 | **DB 迁移靠「每次启动重跑 schema 并 ALTER」** | `schema.sql` 1386 行，靠 `IF NOT EXISTS` + `DO $$` 条件迁移 | 毕设可用，但**论文里要说明这是取舍**（幂等重跑 vs. 版本化迁移），更规范的做法是 migration 表 + 版本号 |
 | **多任务并发状态机复杂** | `engine.go` 1245 行里绝大部分是 pause/delete/settling/kill/steer 的边界处理 | 先做「单任务串行」，跑通了再加并发与中断 |
